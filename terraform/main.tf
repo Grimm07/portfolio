@@ -25,8 +25,8 @@ resource "cloudflare_pages_project" "portfolio" {
   # Production branch that triggers automatic deployments
   production_branch = "main"
 
-  # Build configuration for the deployment process
-  build_config {
+  # Build configuration for the deployment process (v5 argument syntax)
+  build_config = {
     # Command to build the Vite + React project
     build_command = "npm run build"
 
@@ -37,13 +37,13 @@ resource "cloudflare_pages_project" "portfolio" {
     root_dir = "/"
   }
 
-  # GitHub source configuration for automatic deployments
-  source {
+  # GitHub source configuration for automatic deployments (v5 argument syntax)
+  source = {
     # Source type: GitHub integration
     type = "github"
 
     # GitHub repository configuration
-    config {
+    config = {
       # GitHub repository owner username
       owner = var.github_repo_owner
 
@@ -55,17 +55,17 @@ resource "cloudflare_pages_project" "portfolio" {
     }
   }
 
-  # Environment variables available during build process
+  # Environment variables available during build process (v5 argument syntax)
   # These are injected at build time for Vite to use
-  deployment_configs {
-    production {
+  deployment_configs = {
+    production = {
       environment_variables = {
         # Turnstile site key for frontend CAPTCHA integration
         # Vite requires VITE_ prefix to expose variables to client
         VITE_TURNSTILE_SITE_KEY = var.turnstile_site_key
       }
     }
-    preview {
+    preview = {
       environment_variables = {
         # Same environment variable for preview deployments
         VITE_TURNSTILE_SITE_KEY = var.turnstile_site_key
@@ -80,13 +80,14 @@ resource "cloudflare_pages_project" "portfolio" {
 resource "cloudflare_pages_domain" "portfolio" {
   account_id   = var.cloudflare_account_id
   project_name = cloudflare_pages_project.portfolio.name
-  domain       = var.domain_name
+  # v5: domain renamed to name
+  name = var.domain_name
 }
 
-# DNS CNAME Record for Root Domain
+# DNS CNAME Record for Root Domain (v5: cloudflare_dns_record)
 # Points the root domain (@) to the Cloudflare Pages deployment
 # This allows trystan-tbm.dev to serve the portfolio site
-resource "cloudflare_record" "pages_root" {
+resource "cloudflare_dns_record" "pages_root" {
   # Zone ID where the DNS record will be created
   zone_id = var.cloudflare_zone_id
 
@@ -109,10 +110,10 @@ resource "cloudflare_record" "pages_root" {
   ttl = 1
 }
 
-# DNS CNAME Record for WWW Subdomain
+# DNS CNAME Record for WWW Subdomain (v5: cloudflare_dns_record)
 # Points www.trystan-tbm.dev to the same Pages deployment
 # This ensures both trystan-tbm.dev and www.trystan-tbm.dev work
-resource "cloudflare_record" "pages_www" {
+resource "cloudflare_dns_record" "pages_www" {
   # Zone ID where the DNS record will be created
   zone_id = var.cloudflare_zone_id
 
@@ -143,26 +144,28 @@ resource "cloudflare_workers_script" "contact_form" {
   # Account ID where the Worker will be deployed
   account_id = var.cloudflare_account_id
 
-  # Worker script name in Cloudflare dashboard
-  name = "portfolio-contact-worker"
+  # Worker script name in Cloudflare dashboard (v5: script_name instead of name)
+  script_name = "portfolio-contact-worker"
 
   # Path to the built Worker JavaScript file
   # Note: This must be built before running terraform apply
   content = file("${path.module}/../worker/dist/index.js")
 
-  # Secret text bindings for sensitive environment variables
-  # These are securely stored and accessible in the Worker via env bindings
-  secret_text_binding {
-    # Turnstile secret key for CAPTCHA verification
-    name = "TURNSTILE_SECRET_KEY"
-    text = var.turnstile_secret_key
-  }
-
-  secret_text_binding {
-    # Email address to receive contact form submissions
-    name = "CONTACT_EMAIL"
-    text = var.contact_email
-  }
+  # Bindings for environment variables (v5 argument syntax)
+  bindings = [
+    {
+      # Turnstile secret key for CAPTCHA verification
+      type = "secret_text"
+      name = "TURNSTILE_SECRET_KEY"
+      text = var.turnstile_secret_key
+    },
+    {
+      # Email address to receive contact form submissions
+      type = "secret_text"
+      name = "CONTACT_EMAIL"
+      text = var.contact_email
+    }
+  ]
 }
 
 # Cloudflare Worker Route
@@ -176,6 +179,6 @@ resource "cloudflare_workers_route" "contact_form" {
   # Example: trystan-tbm.dev/api/contact, trystan-tbm.dev/api/health, etc.
   pattern = "${var.domain_name}/api/*"
 
-  # Name of the Worker script to route requests to
-  script_name = cloudflare_workers_script.contact_form.name
+  # Name of the Worker script to route requests to (v5: script instead of script_name)
+  script = cloudflare_workers_script.contact_form.script_name
 }
