@@ -5,10 +5,20 @@ pre-commit:
   # Run commands in parallel for faster execution
   parallel: true
   commands:
-    # TypeScript type checking
+    # TypeScript type checking (frontend)
     # Validates that all TypeScript code compiles without errors
     typecheck:
       run: npx tsc --noEmit
+      # Skip during merge/rebase to avoid conflicts
+      skip:
+        - merge
+        - rebase
+    
+    # TypeScript type checking (worker)
+    # Validates worker TypeScript code separately (has its own tsconfig)
+    typecheck-worker:
+      run: npm run typecheck
+      root: worker/
       # Skip during merge/rebase to avoid conflicts
       skip:
         - merge
