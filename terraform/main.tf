@@ -98,7 +98,7 @@ resource "cloudflare_record" "pages_root" {
 
   # Target: Cloudflare Pages canonical domain for the project
   # Format: <project-name>.pages.dev
-  value = "${cloudflare_pages_project.portfolio.name}.pages.dev"
+  content = "${cloudflare_pages_project.portfolio.name}.pages.dev"
 
   # Enable Cloudflare proxy (orange cloud)
   # This provides DDoS protection, CDN, and SSL/TLS encryption
@@ -124,7 +124,7 @@ resource "cloudflare_record" "pages_www" {
 
   # Target: Cloudflare Pages canonical domain for the project
   # Format: <project-name>.pages.dev
-  value = "${cloudflare_pages_project.portfolio.name}.pages.dev"
+  content = "${cloudflare_pages_project.portfolio.name}.pages.dev"
 
   # Enable Cloudflare proxy (orange cloud)
   # This provides DDoS protection, CDN, and SSL/TLS encryption
