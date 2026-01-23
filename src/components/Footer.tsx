@@ -8,7 +8,7 @@ export function Footer() {
 
       <div className="max-w-7xl mx-auto px-6 text-center relative z-10">
         <p className="text-sm text-text-tertiary mb-2">
-          © 2025 Trystan Bates-Maricle
+          © {new Date().getFullYear()} Trystan Bates-Maricle
         </p>
         <p className="text-sm text-text-tertiary mb-4">
           Built with{' '}
