@@ -13,12 +13,6 @@ provider "cloudflare" {
   api_token = var.cloudflare_api_token
 }
 
-# Data source to fetch zone information
-# This retrieves the zone details for the custom domain
-data "cloudflare_zone" "main" {
-  zone_id = var.cloudflare_zone_id
-}
-
 # Cloudflare Pages Project
 # This resource creates a Pages project that automatically deploys from GitHub
 resource "cloudflare_pages_project" "portfolio" {
@@ -65,14 +59,14 @@ resource "cloudflare_pages_project" "portfolio" {
   # These are injected at build time for Vite to use
   deployment_configs {
     production {
-      env_vars = {
+      environment_variables = {
         # Turnstile site key for frontend CAPTCHA integration
         # Vite requires VITE_ prefix to expose variables to client
         VITE_TURNSTILE_SITE_KEY = var.turnstile_site_key
       }
     }
     preview {
-      env_vars = {
+      environment_variables = {
         # Same environment variable for preview deployments
         VITE_TURNSTILE_SITE_KEY = var.turnstile_site_key
       }
@@ -145,7 +139,7 @@ resource "cloudflare_record" "pages_www" {
 # IMPORTANT: Build Worker before applying Terraform
 # Run: cd worker && npm run build
 # This ensures worker/dist/index.js exists before Terraform reads it
-resource "cloudflare_worker_script" "contact_form" {
+resource "cloudflare_workers_script" "contact_form" {
   # Account ID where the Worker will be deployed
   account_id = var.cloudflare_account_id
 
@@ -174,7 +168,7 @@ resource "cloudflare_worker_script" "contact_form" {
 # Cloudflare Worker Route
 # Attaches the Worker to a custom domain route pattern
 # This routes all requests matching the pattern to the Worker script
-resource "cloudflare_worker_route" "contact_form" {
+resource "cloudflare_workers_route" "contact_form" {
   # Zone ID for the domain where the route will be attached
   zone_id = var.cloudflare_zone_id
 
@@ -183,5 +177,5 @@ resource "cloudflare_worker_route" "contact_form" {
   pattern = "${var.domain_name}/api/*"
 
   # Name of the Worker script to route requests to
-  script_name = cloudflare_worker_script.contact_form.name
+  script_name = cloudflare_workers_script.contact_form.name
 }

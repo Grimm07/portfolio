@@ -7,8 +7,8 @@ export function ThemeToggle() {
       const saved = localStorage.getItem('theme');
       if (saved === 'light') return false;
       if (saved === 'dark') return true;
-      // If no saved preference, check current HTML class
-      return document.documentElement.classList.contains('dark');
+      // Default to dark mode when no preference saved
+      return true;
     }
     return true;
   });

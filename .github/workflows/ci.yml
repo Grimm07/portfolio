@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+# Minimum permissions required - all jobs only need to read repository contents
+permissions:
+  contents: read
+
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
@@ -30,6 +34,17 @@ jobs:
 
       - name: Run ESLint
         run: npm run lint
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run test:run
 
   build-test:
     name: Build Project
@@ -82,14 +97,7 @@ jobs:
 
       - name: Build worker
         working-directory: worker
-        run: |
-          # Check if build script exists in package.json and run it
-          if grep -q '"build"' package.json; then
-            npm run build
-          else
-            echo "No build script found in worker/package.json"
-            echo "Note: Add a build script if worker/dist/index.js is required"
-          fi
+        run: npm run build
 
       - name: Verify worker/dist/index.js exists
         run: |
@@ -97,6 +105,57 @@ jobs:
             echo "✓ worker/dist/index.js exists"
           else
             echo "Error: worker/dist/index.js not found"
-            echo "Note: If using Wrangler build, ensure build script outputs to dist/"
             exit 1
           fi
+
+  terraform:
+    name: Terraform Lint & Validate
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Build worker first - terraform validate needs worker/dist/index.js
+      # because main.tf uses file() to read the worker script
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Build worker for Terraform
+        working-directory: worker
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6"
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -backend=false
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: latest
+
+      - name: Init TFLint
+        working-directory: terraform
+        run: tflint --init
+
+      - name: Run TFLint
+        working-directory: terraform
+        run: tflint --format compact
