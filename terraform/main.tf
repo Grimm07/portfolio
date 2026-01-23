@@ -151,6 +151,13 @@ resource "cloudflare_workers_script" "contact_form" {
   # Note: This must be built before running terraform apply
   content = file("${path.module}/../worker/dist/index.js")
 
+  # ESM module format (required for export syntax)
+  module = true
+
+  # Compatibility settings (must match wrangler.toml)
+  compatibility_date  = "2024-01-01"
+  compatibility_flags = ["nodejs_compat"]
+
   # Bindings for environment variables (v5 argument syntax)
   bindings = [
     {
