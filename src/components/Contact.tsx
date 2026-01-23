@@ -62,18 +62,13 @@ export function Contact() {
   });
 
   const [turnstileToken, setTurnstileToken] = useState<string>('');
-  const [formTimestamp, setFormTimestamp] = useState<number>(0);
+  const [formTimestamp, setFormTimestamp] = useState<number>(Date.now);
   const [submissionState, setSubmissionState] = useState<SubmissionState>({
     status: 'idle',
     message: '',
   });
   const [theme, setTheme] = useState<'light' | 'dark'>(getCurrentTheme());
   const turnstileRef = useRef<TurnstileInstance>(null);
-
-  // Set form timestamp on mount (for time validation)
-  useEffect(() => {
-    setFormTimestamp(Date.now());
-  }, []);
 
   // Watch for theme changes
   useEffect(() => {
