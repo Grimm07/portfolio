@@ -66,6 +66,16 @@ interface TurnstileVerifyResponse {
   hostname?: string;
 }
 
+/** Raw JSON payload from contact form (before validation) */
+interface RawContactFormPayload {
+  name?: unknown;
+  email?: unknown;
+  message?: unknown;
+  turnstileToken?: unknown;
+  website?: unknown;
+  timestamp?: unknown;
+}
+
 /**
  * Handle CORS preflight requests
  */
@@ -191,9 +201,14 @@ function checkTimeValidation(data: ContactFormData): boolean {
 /**
  * Security Layer 4: Email Validation
  * Server-side regex validation for email format
+ * 
+ * Note: The regex uses [^\s@.]+ for domain segments to prevent ReDoS attacks.
+ * By excluding dots from each segment, there's no ambiguity about segment boundaries.
  */
 function validateEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // Local part allows dots, domain segments are separated by dots
+  // Pattern: local@segment.segment (requires at least one dot in domain)
+  const emailRegex = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
   return emailRegex.test(email);
 }
 
@@ -245,7 +260,7 @@ async function parseFormData(request: Request): Promise<ContactFormData | null> 
     const contentType = request.headers.get('Content-Type') || '';
     
     if (contentType.includes('application/json')) {
-      const data = await request.json();
+      const data = await request.json() as RawContactFormPayload;
       return {
         name: String(data.name || '').trim(),
         email: String(data.email || '').trim(),

@@ -320,5 +320,5 @@ All text meets WCAG AA minimum contrast requirements:
 
 For accessibility concerns or suggestions, please use the contact form on the website.
 
-**Last Updated:** 2025-01-XX
+**Last Updated:** 2026-01-23
 **Compliance Level:** WCAG 2.1 Level AA ✅
