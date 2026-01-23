@@ -66,6 +66,16 @@ interface TurnstileVerifyResponse {
   hostname?: string;
 }
 
+/** Raw JSON payload from contact form (before validation) */
+interface RawContactFormPayload {
+  name?: unknown;
+  email?: unknown;
+  message?: unknown;
+  turnstileToken?: unknown;
+  website?: unknown;
+  timestamp?: unknown;
+}
+
 /**
  * Handle CORS preflight requests
  */
@@ -245,7 +255,7 @@ async function parseFormData(request: Request): Promise<ContactFormData | null> 
     const contentType = request.headers.get('Content-Type') || '';
     
     if (contentType.includes('application/json')) {
-      const data = await request.json();
+      const data = await request.json() as RawContactFormPayload;
       return {
         name: String(data.name || '').trim(),
         email: String(data.email || '').trim(),
