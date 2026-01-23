@@ -13,12 +13,6 @@ provider "cloudflare" {
   api_token = var.cloudflare_api_token
 }
 
-# Data source to fetch zone information
-# This retrieves the zone details for the custom domain
-data "cloudflare_zone" "main" {
-  zone_id = var.cloudflare_zone_id
-}
-
 # Cloudflare Pages Project
 # This resource creates a Pages project that automatically deploys from GitHub
 resource "cloudflare_pages_project" "portfolio" {

@@ -8,6 +8,10 @@ on:
     branches:
       - main
 
+# Minimum permissions required - all jobs only need to read repository contents
+permissions:
+  contents: read
+
 jobs:
   lint-and-typecheck:
     name: Lint and Type Check
@@ -144,7 +148,7 @@ jobs:
         run: terraform validate
 
       - name: Setup TFLint
-        uses: terraform-linters/setup-tflint@v4
+        uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: latest
 
