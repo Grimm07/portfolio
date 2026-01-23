@@ -8,9 +8,10 @@ on:
     branches:
       - main
 
-# Minimum permissions required - all jobs only need to read repository contents
+# Permissions - deploy job needs write for PR comments (optional)
 permissions:
   contents: read
+  pull-requests: write
 
 jobs:
   lint-and-typecheck:
@@ -159,3 +160,97 @@ jobs:
       - name: Run TFLint
         working-directory: terraform
         run: tflint --format compact
+
+  # =============================================================================
+  # DEPLOYMENT JOB
+  # =============================================================================
+  # Runs only on push to main (not PRs), after all validation passes
+  # Uses Terraform Cloud for state management (separate from validation)
+  deploy:
+    name: Deploy Infrastructure
+    runs-on: ubuntu-latest
+    # Only deploy on push to main, not on PRs
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Wait for all validation jobs to pass
+    needs: [lint-and-typecheck, test, build-test, build-worker, terraform]
+    environment: production
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Build frontend for Pages deployment verification
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build frontend
+        run: npm run build
+
+      # Build worker - required before Terraform apply
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Build worker
+        working-directory: worker
+        run: npm run build
+
+      - name: Verify artifacts exist
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "Error: dist folder not found"
+            exit 1
+          fi
+          if [ ! -f "worker/dist/index.js" ]; then
+            echo "Error: worker/dist/index.js not found"
+            exit 1
+          fi
+          echo "✓ All build artifacts present"
+
+      # Terraform deployment with remote state
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.6"
+
+      - name: Terraform Init
+        working-directory: terraform
+        env:
+          TF_HTTP_USERNAME: gitlab-ci-token
+          TF_HTTP_PASSWORD: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: terraform
+        env:
+          TF_HTTP_USERNAME: gitlab-ci-token
+          TF_HTTP_PASSWORD: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
+          TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
+          TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
+          TF_VAR_github_repo_owner: ${{ github.repository_owner }}
+          TF_VAR_github_repo_name: ${{ github.event.repository.name }}
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          TF_HTTP_USERNAME: gitlab-ci-token
+          TF_HTTP_PASSWORD: ${{ secrets.GITLAB_ACCESS_TOKEN }}
+          TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+          TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
+          TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
+          TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
+          TF_VAR_github_repo_owner: ${{ github.repository_owner }}
+          TF_VAR_github_repo_name: ${{ github.event.repository.name }}
+        run: terraform apply -auto-approve tfplan
