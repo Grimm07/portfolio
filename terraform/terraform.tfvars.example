@@ -1,0 +1,18 @@
+# Cloudflare API Configuration
+cloudflare_api_token  = "your-api-token"
+cloudflare_account_id = "your-account-id"
+cloudflare_zone_id    = "your-zone-id"
+
+# Turnstile CAPTCHA Configuration
+turnstile_site_key    = "your-site-key"
+turnstile_secret_key  = "your-secret-key"
+
+# Contact Form Configuration
+contact_email         = "your-email@example.com"
+
+# GitHub Repository Configuration
+github_repo_owner = "trystan-tbm"
+github_repo_name  = "portfolio"
+
+# Domain Configuration (optional, defaults to trystan-tbm.dev)
+# domain_name = "trystan-tbm.dev"

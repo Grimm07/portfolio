@@ -1,0 +1,20 @@
+name = "portfolio-contact-worker"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Local development variables:
+# - Put CONTACT_EMAIL and TURNSTILE_SECRET_KEY in worker/.dev.vars (gitignored)
+# - In production, set them as secrets (see commands below)
+
+# Environment bindings (secrets must be set via: wrangler secret put <KEY>)
+# Required secrets:
+# - TURNSTILE_SECRET_KEY: Cloudflare Turnstile secret key
+# - CONTACT_EMAIL: Email address to receive contact form submissions (overrides vars in production)
+#
+# For local development, create worker/.dev.vars file with:
+# TURNSTILE_SECRET_KEY=your_secret_key_here
+#
+# To set secrets for production:
+# wrangler secret put TURNSTILE_SECRET_KEY
+# wrangler secret put CONTACT_EMAIL

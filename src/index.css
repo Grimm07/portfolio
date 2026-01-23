@@ -1,0 +1,289 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-primary: #ffffff;
+    --bg-secondary: #f8f9fa;
+    --bg-tertiary: #e9ecef;
+    --text-primary: #1a1a1a;
+    --text-secondary: #4a4a4a;
+    --text-tertiary: #6b7280;
+    --border-color: #d1d5db;
+  }
+
+  html.dark {
+    --bg-primary: #0a0a0a;
+    --bg-secondary: #141414;
+    --bg-tertiary: #1f1f1f;
+    --text-primary: #f9fafb;
+    --text-secondary: #e5e7eb;
+    --text-tertiary: #9ca3af;
+    --border-color: #374151;
+    color-scheme: dark;
+  }
+
+  body {
+    @apply font-sans antialiased;
+    background-color: var(--bg-primary);
+    color: var(--text-primary);
+  }
+
+  /* Ensure background colors update with theme */
+  .bg-bg-primary {
+    background-color: var(--bg-primary) !important;
+  }
+
+  .bg-bg-secondary {
+    background-color: var(--bg-secondary) !important;
+  }
+
+  .bg-bg-tertiary {
+    background-color: var(--bg-tertiary) !important;
+  }
+
+
+  /* Section separators */
+  section:not(#hero) {
+    border-top: 1px solid var(--border-color);
+  }
+
+  /* Ensure text colors are readable */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    color: var(--text-primary);
+  }
+
+  /* Ensure form inputs have readable text */
+  input,
+  textarea {
+    color: var(--text-primary);
+  }
+
+  input::placeholder,
+  textarea::placeholder {
+    color: var(--text-tertiary);
+  }
+
+  /* Skip to content link - hidden until focused */
+  .skip-to-content {
+    position: absolute;
+    left: -9999px;
+    z-index: 100;
+  }
+
+  .skip-to-content:focus {
+    position: fixed;
+    left: 1rem;
+    top: 1rem;
+    padding: 0.5rem 1rem;
+    background-color: #3b82f6;
+    color: white;
+    border-radius: 0.5rem;
+    font-weight: 600;
+    outline: none;
+    box-shadow: 0 0 0 2px #3b82f6, 0 0 0 4px rgba(10, 10, 10, 1);
+  }
+
+  /* Enhanced focus styles for all interactive elements */
+  *:focus-visible {
+    @apply outline-none ring-2 ring-primary ring-offset-2 ring-offset-bg-primary;
+  }
+
+  /* Respect reduced motion preference */
+  @media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer components {
+  .btn-primary {
+    @apply px-6 py-3 bg-primary text-white rounded-lg font-semibold hover:bg-primary-dark transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 border-2 border-primary text-primary rounded-lg font-semibold hover:bg-primary hover:text-white transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-primary;
+  }
+
+  /* Glassmorphism card - large (for hero, main content areas) */
+  .glass-card {
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 1.5rem;
+  }
+
+  /* Glassmorphism card - small (for content cards) */
+  .glass-card-sm {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border-radius: 0.75rem;
+  }
+
+  /* Dark mode glass styles (default) */
+  html.dark .glass-card,
+  html.dark .glass-card-sm {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 
+      0 8px 32px rgba(0, 0, 0, 0.3),
+      inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  }
+
+  /* Light mode glass styles - frosty, muted tones */
+  html:not(.dark) .glass-card,
+  html:not(.dark) .glass-card-sm {
+    background: rgba(30, 41, 59, 0.06);
+    border: 1px solid rgba(30, 41, 59, 0.1);
+    box-shadow:
+      0 8px 32px rgba(30, 41, 59, 0.08),
+      inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  }
+
+  /* Glass card hover states */
+  .glass-card-sm {
+    transition: all 0.3s ease;
+  }
+
+  html.dark .glass-card-sm:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: rgba(139, 92, 246, 0.3);
+    box-shadow: 
+      0 12px 40px rgba(0, 0, 0, 0.4),
+      inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  }
+
+  html:not(.dark) .glass-card-sm:hover {
+    background: rgba(30, 41, 59, 0.1);
+    border-color: rgba(59, 130, 246, 0.3);
+    box-shadow:
+      0 12px 40px rgba(30, 41, 59, 0.12),
+      inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  }
+
+  /* Section background with orbs */
+  .section-with-orbs {
+    position: relative;
+    overflow: hidden;
+  }
+
+  .section-with-orbs::before,
+  .section-with-orbs::after {
+    content: '';
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(80px);
+    pointer-events: none;
+  }
+
+  html.dark .section-with-orbs::before {
+    background: rgba(59, 130, 246, 0.15);
+  }
+
+  html.dark .section-with-orbs::after {
+    background: rgba(139, 92, 246, 0.15);
+  }
+
+  html:not(.dark) .section-with-orbs::before {
+    background: rgba(59, 130, 246, 0.12);
+  }
+
+  html:not(.dark) .section-with-orbs::after {
+    background: rgba(139, 92, 246, 0.12);
+  }
+
+  /* Hero name gradient - page load animation */
+  .hero-name-gradient {
+    background: linear-gradient(
+      90deg,
+      #3b82f6 0%,
+      #6366f1 35%,
+      #8b5cf6 50%,
+      #6366f1 65%,
+      #3b82f6 100%
+    );
+    background-size: 200% 100%;
+    background-clip: text;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: gradient-sweep 5s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  }
+
+  @keyframes gradient-sweep {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0% 50%;
+    }
+  }
+
+  /* Replay animation on theme change */
+  .hero-name-gradient.animate {
+    animation: none;
+  }
+  
+  .hero-name-gradient.animate-active {
+    animation: gradient-sweep 5s cubic-bezier(0.25, 0.1, 0.25, 1) forwards;
+  }
+
+  /* Respect reduced motion preference */
+  @media (prefers-reduced-motion: reduce) {
+    .hero-name-gradient,
+    .hero-name-gradient.animate-active {
+      animation: none;
+      background-position: 50% 50%;
+    }
+  }
+
+  /* Modal animations */
+  .animate-fade-in {
+    animation: fade-in 150ms ease-out forwards;
+  }
+
+  .animate-scale-in {
+    animation: scale-in 150ms ease-out forwards;
+  }
+
+  @keyframes fade-in {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  @keyframes scale-in {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* Respect reduced motion for modal */
+  @media (prefers-reduced-motion: reduce) {
+    .animate-fade-in,
+    .animate-scale-in {
+      animation: none;
+    }
+  }
+}

@@ -1,0 +1,75 @@
+# Dependabot Configuration
+#
+# Dependabot is GitHub's automated dependency update tool that helps keep your
+# project dependencies secure and up-to-date. It automatically:
+# - Monitors your dependency files (package.json, Gemfile, etc.)
+# - Checks for security vulnerabilities in your dependencies
+# - Creates pull requests to update outdated packages
+# - Helps maintain a secure and modern dependency stack
+#
+# Why Dependabot is important:
+# - Security: Automatically patches known vulnerabilities in dependencies
+# - Maintenance: Keeps dependencies current with latest features and bug fixes
+# - Compliance: Helps meet security best practices and compliance requirements
+# - Efficiency: Reduces manual dependency management overhead
+#
+# This configuration sets up automated dependency updates for:
+# - npm packages (root and worker directories)
+# - Terraform providers
+# - GitHub Actions workflows
+
+version: 2
+updates:
+  # Root npm dependencies (main frontend application)
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    versioning-strategy: increase
+    labels:
+      - "dependencies"
+    rebase-strategy: "auto"
+    # Auto-merge is disabled - manual review required for security and compatibility
+    # Uncomment and configure if you want automatic merging for patch updates:
+    # auto-merge: true
+    # allow:
+    #   - dependency-type: "development"
+    #   - dependency-type: "production"
+    #   - update-type: "security"
+
+  # Worker npm dependencies (Cloudflare Worker backend)
+  - package-ecosystem: "npm"
+    directory: "/worker"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+    rebase-strategy: "auto"
+
+  # Terraform providers (infrastructure as code)
+  - package-ecosystem: "terraform"
+    directory: "/terraform"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 3
+    labels:
+      - "dependencies"
+    rebase-strategy: "auto"
+
+  # GitHub Actions workflows (CI/CD automation)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    labels:
+      - "dependencies"
+    rebase-strategy: "auto"
+    # Optional: Add assignees for PR notifications
+    # assignees:
+    #   - "your-github-username"

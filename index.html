@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <!-- Primary Meta Tags -->
+  <title>Trystan Bates-Maricle | AI/ML Engineer | Full-Stack Developer | Cloud Infrastructure</title>
+  <meta name="title" content="Trystan Bates-Maricle | AI/ML Engineer | Full-Stack Developer" />
+  <meta name="description"
+    content="AI/ML Engineer specializing in NLP, Computer Vision, and LLM integration. Building intelligent systems that scale with modern cloud infrastructure." />
+  <meta name="keywords"
+    content="AI/ML Engineer, Machine Learning, NLP, Computer Vision, Full-Stack Developer, Cloud Infrastructure, React, TypeScript, Cloudflare" />
+  <meta name="author" content="Trystan Bates-Maricle" />
+  <meta name="theme-color" content="#0a0a0a" />
+  <meta name="color-scheme" content="dark light" />
+
+  <!-- Open Graph / Facebook -->
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://trystan-tbm.dev/" />
+  <meta property="og:title" content="Trystan Bates-Maricle | AI/ML Engineer | Full-Stack Developer" />
+  <meta property="og:description"
+    content="AI/ML Engineer specializing in NLP, Computer Vision, and LLM integration. Building intelligent systems that scale." />
+  <meta property="og:site_name" content="Trystan Bates-Maricle Portfolio" />
+
+  <!-- Twitter -->
+  <meta property="twitter:card" content="summary_large_image" />
+  <meta property="twitter:url" content="https://trystan-tbm.dev/" />
+  <meta property="twitter:title" content="Trystan Bates-Maricle | AI/ML Engineer | Full-Stack Developer" />
+  <meta property="twitter:description"
+    content="AI/ML Engineer specializing in NLP, Computer Vision, and LLM integration. Building intelligent systems that scale." />
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+
+  <!-- Font Preconnect for Performance -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
+  <!-- Content Security Policy -->
+  <!-- 
+      For static SPA: CSP must be in meta tag (no server headers).
+      - 'unsafe-inline' and 'unsafe-eval' needed for Vite HMR in development
+      - In production, Vite bundles don't use eval, but 'unsafe-inline' may still be needed for React
+      - Turnstile requires challenges.cloudflare.com for scripts and frames
+      - worker-src needed for Cloudflare Workers
+    -->
+  <meta http-equiv="Content-Security-Policy"
+    content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://challenges.cloudflare.com https://*.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; frame-src 'self' https://challenges.cloudflare.com https://*.cloudflare.com; connect-src 'self' https://challenges.cloudflare.com https://*.cloudflare.com; worker-src 'self' blob:; img-src 'self' data: https:;" />
+  
+  <!-- Initialize theme before React loads to prevent flash -->
+  <script>
+    (function() {
+      const theme = localStorage.getItem('theme');
+      const isDark = theme !== 'light';
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    })();
+  </script>
+</head>
+
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+
+</html>

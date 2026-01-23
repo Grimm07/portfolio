@@ -1,0 +1,19 @@
+# Tmuxinator profile for Portfolio project
+# Usage: tmuxinator start portfolio
+
+name: portfolio
+root: ~/code/portfolio
+
+windows:
+  - frontend:
+      root: ~/code/portfolio
+      panes:
+        - npm run dev
+  - worker:
+      root: ~/code/portfolio/worker
+      panes:
+        - npm run dev
+  - main:
+      root: ~/code/portfolio
+      panes:
+        - # General terminal

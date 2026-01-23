@@ -1,0 +1,57 @@
+# Lefthook pre-commit hooks configuration
+# See: https://github.com/evilmartians/lefthook
+
+pre-commit:
+  # Run commands in parallel for faster execution
+  parallel: true
+  commands:
+    # TypeScript type checking
+    # Validates that all TypeScript code compiles without errors
+    typecheck:
+      run: npx tsc --noEmit
+      # Skip during merge/rebase to avoid conflicts
+      skip:
+        - merge
+        - rebase
+    
+    # ESLint code linting
+    # Checks staged TypeScript/TSX files for code quality issues
+    lint:
+      glob: '*.{ts,tsx}'
+      run: npx eslint {staged_files}
+      # Skip during merge/rebase to avoid conflicts
+      skip:
+        - merge
+        - rebase
+    
+    # Secrets detection
+    # Prevents committing API keys, email addresses, and other sensitive data
+    # Patterns checked:
+    # - AWS Access Keys (AKIA...)
+    # - Google API keys (AIza...)
+    # - Stripe live keys (sk_live_...)
+    # - Email addresses
+    secrets-check:
+      run: |
+        if git diff --cached --name-only | xargs grep -nHE '(AKIA|AIza[0-9A-Za-z-_]{35}|sk_live_[0-9a-zA-Z]{24}|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})' 2>/dev/null; then
+          echo "❌ Potential secrets or email addresses detected in staged files!"
+          echo "Please review and remove before committing."
+          exit 1
+        fi
+      # Skip during merge/rebase to avoid conflicts
+      skip:
+        - merge
+        - rebase
+
+commit-msg:
+  commands:
+    # Commit message validation
+    # Ensures commit messages meet minimum length requirement (10 characters)
+    # This helps maintain meaningful commit history
+    minimum-length:
+      run: |
+        message=$(cat {1})
+        if [ ${#message} -lt 10 ]; then
+          echo "❌ Commit message too short (minimum 10 characters)"
+          exit 1
+        fi

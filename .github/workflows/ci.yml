@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint-and-typecheck:
+    name: Lint and Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run TypeScript type check
+        run: npx tsc --noEmit
+
+      - name: Run ESLint
+        run: npm run lint
+
+  build-test:
+    name: Build Project
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build project
+        run: npm run build
+
+      - name: Verify dist folder exists
+        run: |
+          if [ ! -d "dist" ]; then
+            echo "Error: dist folder not found"
+            exit 1
+          fi
+          echo "✓ dist folder exists"
+
+  build-worker:
+    name: Build Worker
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: worker/package-lock.json
+
+      - name: Install worker dependencies
+        working-directory: worker
+        run: npm ci
+
+      - name: Run worker type check
+        working-directory: worker
+        run: npm run typecheck
+
+      - name: Build worker
+        working-directory: worker
+        run: |
+          # Check if build script exists in package.json and run it
+          if grep -q '"build"' package.json; then
+            npm run build
+          else
+            echo "No build script found in worker/package.json"
+            echo "Note: Add a build script if worker/dist/index.js is required"
+          fi
+
+      - name: Verify worker/dist/index.js exists
+        run: |
+          if [ -f "worker/dist/index.js" ]; then
+            echo "✓ worker/dist/index.js exists"
+          else
+            echo "Error: worker/dist/index.js not found"
+            echo "Note: If using Wrangler build, ensure build script outputs to dist/"
+            exit 1
+          fi
