@@ -14,6 +14,14 @@ export default defineConfig({
     // Ensure proper handling of dayjs CommonJS module
     dedupe: ['dayjs'],
   },
+  // Remove non-error console statements in production builds
+  // Keeps console.error for critical error reporting
+  esbuild: {
+    drop: process.env.NODE_ENV === 'production' ? ['debugger'] : [],
+    pure: process.env.NODE_ENV === 'production' 
+      ? ['console.log', 'console.info', 'console.debug', 'console.warn', 'console.trace'] 
+      : [],
+  },
   build: {
     // Enable minification (default: true)
     minify: 'esbuild',
