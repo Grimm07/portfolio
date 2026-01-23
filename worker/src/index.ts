@@ -201,9 +201,14 @@ function checkTimeValidation(data: ContactFormData): boolean {
 /**
  * Security Layer 4: Email Validation
  * Server-side regex validation for email format
+ * 
+ * Note: The regex uses [^\s@.]+ for domain segments to prevent ReDoS attacks.
+ * By excluding dots from each segment, there's no ambiguity about segment boundaries.
  */
 function validateEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  // Local part allows dots, domain segments are separated by dots
+  // Pattern: local@segment.segment (requires at least one dot in domain)
+  const emailRegex = /^[^\s@]+@[^\s@.]+(\.[^\s@.]+)+$/;
   return emailRegex.test(email);
 }
 
