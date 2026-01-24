@@ -140,32 +140,62 @@ resource "cloudflare_dns_record" "pages_www" {
 # IMPORTANT: Build Worker before applying Terraform
 # Run: cd worker && npm run build
 # This ensures worker/dist/index.js exists before Terraform reads it
-resource "cloudflare_workers_script" "contact_form" {
-  # Account ID where the Worker will be deployed
+#
+# Uses the v5 provider pattern:
+# 1. cloudflare_worker - Creates the Worker container
+# 2. cloudflare_worker_version - Defines ESM module content
+# 3. cloudflare_workers_deployment - Deploys the version
+
+# Worker container
+resource "cloudflare_worker" "contact_form" {
   account_id = var.cloudflare_account_id
+  name       = "portfolio-contact-worker"
+}
 
-  # Worker script name in Cloudflare dashboard (v5: script_name instead of name)
-  script_name = "portfolio-contact-worker"
+# Worker version with ESM module
+resource "cloudflare_worker_version" "contact_form" {
+  account_id = var.cloudflare_account_id
+  worker_id  = cloudflare_worker.contact_form.id
 
-  # Path to the built Worker JavaScript file
-  # Note: This must be built before running terraform apply
-  content = file("${path.module}/../worker/dist/index.js")
+  # Entry point module name
+  main_module = "index.js"
 
-  # Bindings for environment variables (v5 argument syntax)
+  # Compatibility settings (must match wrangler.toml)
+  compatibility_date  = "2024-01-01"
+  compatibility_flags = ["nodejs_compat"]
+
+  # ESM module content
+  modules = [{
+    name         = "index.js"
+    content_type = "application/javascript+module"
+    content_file = "${path.module}/../worker/dist/index.js"
+  }]
+
+  # Secret bindings
   bindings = [
     {
-      # Turnstile secret key for CAPTCHA verification
       type = "secret_text"
       name = "TURNSTILE_SECRET_KEY"
       text = var.turnstile_secret_key
     },
     {
-      # Email address to receive contact form submissions
       type = "secret_text"
       name = "CONTACT_EMAIL"
       text = var.contact_email
     }
   ]
+}
+
+# Deploy the version
+resource "cloudflare_workers_deployment" "contact_form" {
+  account_id  = var.cloudflare_account_id
+  script_name = cloudflare_worker.contact_form.name
+  strategy    = "percentage"
+
+  versions = [{
+    version_id = cloudflare_worker_version.contact_form.id
+    percentage = 100
+  }]
 }
 
 # Cloudflare Worker Route
@@ -179,6 +209,6 @@ resource "cloudflare_workers_route" "contact_form" {
   # Example: trystan-tbm.dev/api/contact, trystan-tbm.dev/api/health, etc.
   pattern = "${var.domain_name}/api/*"
 
-  # Name of the Worker script to route requests to (v5: script instead of script_name)
-  script = cloudflare_workers_script.contact_form.script_name
+  # Name of the Worker script to route requests to
+  script = cloudflare_worker.contact_form.name
 }
