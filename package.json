@@ -51,7 +51,7 @@
     "eslint": "^9.17.0",
     "eslint-plugin-react-hooks": "^7.0.1",
     "eslint-plugin-react-refresh": "^0.4.16",
-    "globals": "^17.1.0",
+    "globals": "^17.3.0",
     "jsdom": "^27.4.0",
     "mermaid": "^11.12.2",
     "postcss": "^8.4.49",
