@@ -44,17 +44,17 @@ const projects: Project[] = [
     tech: ['Kotlin', 'Ktor', 'PostgreSQL', 'RabbitMQ', 'React', 'TypeScript', 'Python', 'FastAPI', 'Docker'],
     githubUrl: 'https://github.com/Grimm07/document-pipeline',
     diagram: `graph TD
-    A[React Frontend] --> B[Ktor REST API]
-    B --> C[File Storage]
-    B --> D[PostgreSQL]
-    B --> E[RabbitMQ]
-    E --> F[Classification Worker]
-    F --> G[ML Service]
-    G --> H{Models}
-    H -->|Zero-Shot| I[DeBERTa-v3-large]
-    H -->|OCR| J[GOT-OCR2]
-    H -->|Bounding Boxes| K[PaddleOCR]
-    F --> D`,
+    Frontend["React Frontend<br/>(Vite SPA)"] -->|"/api proxy"| API["Ktor REST API<br/>(app-api)"]
+    API --> Storage["File Storage<br/>(Local Filesystem)"]
+    API --> DB[("PostgreSQL")]
+    API -->|publish| RMQ["RabbitMQ"]
+    RMQ -->|consume| Worker["Background Worker<br/>(app-worker)"]
+    Worker --> DB
+    Worker --> Storage
+    Worker -->|"POST /classify-with-ocr"| ML["ML Service<br/>(FastAPI)"]
+    ML --> ZS["DeBERTa-v3-large<br/>Zero-Shot Classification"]
+    ML --> OCR["GOT-OCR2<br/>OCR"]
+    ML --> BB["PaddleOCR<br/>Bounding Boxes"]`,
     status: 'active',
   },
   {
