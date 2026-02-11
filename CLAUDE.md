@@ -44,7 +44,7 @@ terraform apply          # Apply infrastructure changes
 ## Architecture
 
 ### Frontend (`src/`)
-- **App.tsx**: Main layout, lazy-loads ArchitectureShowcase (Mermaid.js is large)
+- **App.tsx**: Main layout and component composition
 - **Components**: Functional components with named exports, props interfaces required
 - **Styling**: Tailwind-first with custom theme colors in `tailwind.config.js`
 - **Theme**: Dark mode default, class-based toggle (`darkMode: 'class'`)
