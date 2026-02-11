@@ -37,12 +37,25 @@ const projects: Project[] = [
   },
   {
     id: 2,
-    title: 'Project 2',
-    shortDescription: 'Coming soon - A new project is in development',
-    fullDescription: 'Details about this project will be available soon. Check back for updates!',
-    tech: [],
-    githubUrl: '',
-    status: 'coming-soon',
+    title: 'Document Pipeline',
+    shortDescription: 'Multi-module document ingestion service with ML-powered classification and OCR',
+    fullDescription:
+      'A multi-module Kotlin document ingestion service that accepts document uploads via REST API, stores files locally, and persists metadata in PostgreSQL. Async classification jobs are dispatched through RabbitMQ to a worker that calls an ML service for zero-shot classification (DeBERTa-v3-large) and OCR text extraction (GOT-OCR2 + PaddleOCR). Features a React frontend with rich document viewers, bounding box overlays, and search/filter capabilities. Uses a modular architecture with zero framework dependencies in the core domain layer.',
+    tech: ['Kotlin', 'Ktor', 'PostgreSQL', 'RabbitMQ', 'React', 'TypeScript', 'Python', 'FastAPI', 'Docker'],
+    githubUrl: 'https://github.com/Grimm07/document-pipeline',
+    diagram: `graph TD
+    A[React Frontend] --> B[Ktor REST API]
+    B --> C[File Storage]
+    B --> D[PostgreSQL]
+    B --> E[RabbitMQ]
+    E --> F[Classification Worker]
+    F --> G[ML Service]
+    G --> H{Models}
+    H -->|Zero-Shot| I[DeBERTa-v3-large]
+    H -->|OCR| J[GOT-OCR2]
+    H -->|Bounding Boxes| K[PaddleOCR]
+    F --> D`,
+    status: 'active',
   },
   {
     id: 3,
