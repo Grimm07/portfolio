@@ -44,28 +44,17 @@ const projects: Project[] = [
     tech: ['Kotlin', 'Ktor', 'PostgreSQL', 'RabbitMQ', 'React', 'TypeScript', 'Python', 'FastAPI', 'Docker'],
     githubUrl: 'https://github.com/Grimm07/document-pipeline',
     diagram: `graph TD
-    Frontend["Frontend<br/>(React SPA)"] -->|"/api proxy"| API["app-api<br/>(Ktor REST)"]
-
-    API -->|"CRUD"| DB[("PostgreSQL")]
-    API -->|"store / retrieve / delete"| FS["File Storage<br/>(local filesystem)"]
-    API -->|"publish doc ID"| RMQ["RabbitMQ"]
-
-    RMQ -->|"consume"| Worker["app-worker"]
-
-    Worker -->|"read doc, update classification"| DB
-    Worker -->|"read original, store OCR"| FS
+    Frontend["React Frontend<br/>(Vite SPA)"] -->|"/api proxy"| API["Ktor REST API<br/>(app-api)"]
+    API --> Storage["File Storage<br/>(Local Filesystem)"]
+    API --> DB[("PostgreSQL")]
+    API -->|publish| RMQ["RabbitMQ"]
+    RMQ -->|consume| Worker["Background Worker<br/>(app-worker)"]
+    Worker --> DB
+    Worker --> Storage
     Worker -->|"POST /classify-with-ocr"| ML["ML Service<br/>(FastAPI)"]
-
-    ML --- DeBERTa["DeBERTa-v3-large<br/>Zero-Shot Classification"]
-    ML --- GOT["GOT-OCR2<br/>Text Extraction"]
-    ML --- Paddle["PaddleOCR<br/>Bounding Box Detection"]
-
-    style API fill:#4a9eff,color:#fff
-    style Worker fill:#4a9eff,color:#fff
-    style DB fill:#336791,color:#fff
-    style RMQ fill:#ff6600,color:#fff
-    style ML fill:#009688,color:#fff
-    style Frontend fill:#61dafb,color:#000`,
+    ML --> ZS["DeBERTa-v3-large<br/>Zero-Shot Classification"]
+    ML --> OCR["GOT-OCR2<br/>OCR"]
+    ML --> BB["PaddleOCR<br/>Bounding Boxes"]`,
     status: 'active',
   },
   {
