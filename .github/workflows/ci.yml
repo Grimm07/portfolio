@@ -8,14 +8,16 @@ on:
     branches:
       - main
 
-# Permissions - deploy job needs write for PR comments (optional)
 permissions:
   contents: read
   pull-requests: write
 
 jobs:
-  lint-and-typecheck:
-    name: Lint and Type Check
+  # =============================================================================
+  # VALIDATION JOB - Lint, typecheck, and test in one job
+  # =============================================================================
+  validate:
+    name: Validate
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -30,25 +32,20 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run TypeScript type check
+      - name: TypeScript type check
         run: npx tsc --noEmit
 
-      - name: Run ESLint
+      - name: ESLint
         run: npm run lint
-  test:
-    name: Run Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'npm'
-      - run: npm ci
-      - run: npm run test:run
 
-  build-test:
-    name: Build Project
+      - name: Run tests
+        run: npm run test:run
+
+  # =============================================================================
+  # BUILD JOB - Build frontend and worker, upload artifacts for reuse
+  # =============================================================================
+  build:
+    name: Build
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -60,39 +57,21 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      - name: Install dependencies
+      # Build frontend
+      - name: Install frontend dependencies
         run: npm ci
 
-      - name: Build project
+      - name: Build frontend
+        env:
+          VITE_TURNSTILE_SITE_KEY: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
         run: npm run build
 
-      - name: Verify dist folder exists
-        run: |
-          if [ ! -d "dist" ]; then
-            echo "Error: dist folder not found"
-            exit 1
-          fi
-          echo "✓ dist folder exists"
-
-  build-worker:
-    name: Build Worker
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: worker/package-lock.json
-
+      # Build worker
       - name: Install worker dependencies
         working-directory: worker
         run: npm ci
 
-      - name: Run worker type check
+      - name: Worker type check
         working-directory: worker
         run: npm run typecheck
 
@@ -100,36 +79,38 @@ jobs:
         working-directory: worker
         run: npm run build
 
-      - name: Verify worker/dist/index.js exists
-        run: |
-          if [ -f "worker/dist/index.js" ]; then
-            echo "✓ worker/dist/index.js exists"
-          else
-            echo "Error: worker/dist/index.js not found"
-            exit 1
-          fi
+      # Upload artifacts for downstream jobs
+      - name: Upload frontend build
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: dist/
+          retention-days: 1
 
+      - name: Upload worker build
+        uses: actions/upload-artifact@v4
+        with:
+          name: worker-dist
+          path: worker/dist/
+          retention-days: 1
+
+  # =============================================================================
+  # TERRAFORM VALIDATION - Downloads worker artifact, validates without backend
+  # =============================================================================
   terraform:
-    name: Terraform Lint & Validate
+    name: Terraform Validate
     runs-on: ubuntu-latest
+    needs: [build]
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      # Build worker first - terraform validate needs worker/dist/index.js
-      # because main.tf uses file() to read the worker script
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      # Download worker artifact (needed for terraform validate)
+      - name: Download worker build
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: worker/package-lock.json
-
-      - name: Build worker for Terraform
-        working-directory: worker
-        run: |
-          npm ci
-          npm run build
+          name: worker-dist
+          path: worker/dist/
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -140,7 +121,7 @@ jobs:
         working-directory: terraform
         run: terraform fmt -check -recursive -diff
 
-      - name: Terraform Init
+      - name: Terraform Init (no backend)
         working-directory: terraform
         run: terraform init -backend=false
 
@@ -162,57 +143,37 @@ jobs:
         run: tflint --format compact
 
   # =============================================================================
-  # DEPLOYMENT JOB
+  # DEPLOY JOB - Downloads artifacts, applies Terraform
   # =============================================================================
-  # Runs only on push to main (not PRs), after all validation passes
-  # Uses Terraform Cloud for state management (separate from validation)
   deploy:
-    name: Deploy Infrastructure
+    name: Deploy
     runs-on: ubuntu-latest
-    # Only deploy on push to main, not on PRs
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # Wait for all validation jobs to pass
-    needs: [lint-and-typecheck, test, build-test, build-worker, terraform]
+    needs: [validate, build, terraform]
     environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      # Build frontend for Pages deployment verification
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      # Download pre-built artifacts
+      - name: Download frontend build
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          name: frontend-dist
+          path: dist/
 
-      - name: Install frontend dependencies
-        run: npm ci
+      - name: Download worker build
+        uses: actions/download-artifact@v4
+        with:
+          name: worker-dist
+          path: worker/dist/
 
-      - name: Build frontend
-        run: npm run build
-
-      # Build worker - required before Terraform apply
-      - name: Install worker dependencies
-        working-directory: worker
-        run: npm ci
-
-      - name: Build worker
-        working-directory: worker
-        run: npm run build
-
-      - name: Verify artifacts exist
+      - name: Verify artifacts
         run: |
-          if [ ! -d "dist" ]; then
-            echo "Error: dist folder not found"
-            exit 1
-          fi
-          if [ ! -f "worker/dist/index.js" ]; then
-            echo "Error: worker/dist/index.js not found"
-            exit 1
-          fi
-          echo "✓ All build artifacts present"
+          echo "✓ Frontend: $(find dist -type f | wc -l) files"
+          echo "✓ Worker: $(ls -la worker/dist/index.js)"
 
-      # Terraform deployment with remote state
+      # Terraform deployment
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
@@ -236,8 +197,6 @@ jobs:
           TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
           TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
           TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
-          TF_VAR_github_repo_owner: ${{ github.repository_owner }}
-          TF_VAR_github_repo_name: ${{ github.event.repository.name }}
         run: terraform plan -out=tfplan
 
       - name: Terraform Apply
@@ -251,6 +210,12 @@ jobs:
           TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
           TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
           TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
-          TF_VAR_github_repo_owner: ${{ github.repository_owner }}
-          TF_VAR_github_repo_name: ${{ github.event.repository.name }}
         run: terraform apply -auto-approve tfplan
+
+      # Deploy frontend to Cloudflare Pages (after Terraform ensures infra is ready)
+      - name: Deploy frontend to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist/ --project-name trystan-portfolio --branch main

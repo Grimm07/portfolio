@@ -37,7 +37,7 @@ export function ArchitectureDiagram({ chart, title, className = '', preview = fa
         mermaid.initialize({
           startOnLoad: false,
           theme,
-          securityLevel: 'loose',
+          securityLevel: 'strict',
           fontFamily: 'JetBrains Mono, monospace',
         });
 
