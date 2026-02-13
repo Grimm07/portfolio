@@ -2,11 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import { App } from '../App';
 
-// Mock lazy-loaded component
-vi.mock('../components/ArchitectureShowcase', () => ({
-  ArchitectureShowcase: () => <div data-testid="architecture-showcase">Architecture Showcase</div>,
-}));
-
 // Mock Turnstile to avoid timeout issues
 vi.mock('@marsidev/react-turnstile', () => ({
   Turnstile: () => <div data-testid="turnstile-mock" />,
@@ -51,10 +46,4 @@ describe('App', () => {
     expect(footer).toBeInTheDocument();
   });
 
-  it('lazy loads ArchitectureShowcase with Suspense fallback', async () => {
-    render(<App />);
-    // The component should eventually render (mocked)
-    const showcase = await screen.findByTestId('architecture-showcase');
-    expect(showcase).toBeInTheDocument();
-  });
 });

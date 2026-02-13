@@ -37,12 +37,25 @@ const projects: Project[] = [
   },
   {
     id: 2,
-    title: 'Project 2',
-    shortDescription: 'Coming soon - A new project is in development',
-    fullDescription: 'Details about this project will be available soon. Check back for updates!',
-    tech: [],
-    githubUrl: '',
-    status: 'coming-soon',
+    title: 'Document Pipeline',
+    shortDescription: 'Multi-module document ingestion service with ML-powered classification and OCR',
+    fullDescription:
+      'A multi-module Kotlin document ingestion service that accepts document uploads via REST API, stores files locally, and persists metadata in PostgreSQL. Async classification jobs are dispatched through RabbitMQ to a worker that calls an ML service for zero-shot classification (DeBERTa-v3-large) and OCR text extraction (GOT-OCR2 + PaddleOCR). Features a React frontend with rich document viewers, bounding box overlays, and search/filter capabilities. Uses a modular architecture with zero framework dependencies in the core domain layer.',
+    tech: ['Kotlin', 'Ktor', 'PostgreSQL', 'RabbitMQ', 'React', 'TypeScript', 'Python', 'FastAPI', 'Docker'],
+    githubUrl: 'https://github.com/Grimm07/document-pipeline',
+    diagram: `graph TD
+    Frontend["React Frontend<br/>(Vite SPA)"] -->|"/api proxy"| API["Ktor REST API<br/>(app-api)"]
+    API --> Storage["File Storage<br/>(Local Filesystem)"]
+    API --> DB[("PostgreSQL")]
+    API -->|publish| RMQ["RabbitMQ"]
+    RMQ -->|consume| Worker["Background Worker<br/>(app-worker)"]
+    Worker --> DB
+    Worker --> Storage
+    Worker -->|"POST /classify-with-ocr"| ML["ML Service<br/>(FastAPI)"]
+    ML --> ZS["DeBERTa-v3-large<br/>Zero-Shot Classification"]
+    ML --> OCR["GOT-OCR2<br/>OCR"]
+    ML --> BB["PaddleOCR<br/>Bounding Boxes"]`,
+    status: 'active',
   },
   {
     id: 3,
