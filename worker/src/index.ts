@@ -131,8 +131,8 @@ function checkRateLimit(ip: string): { allowed: boolean; resetTime?: number } {
   const now = Date.now();
   const record = rateLimitMap.get(ip);
   
-  // Clean up expired entries periodically (every 100 requests)
-  if (rateLimitMap.size > 0 && Math.random() < 0.01) {
+  // Clean up expired entries probabilistically, or deterministically if map is large
+  if (rateLimitMap.size > 10_000 || (rateLimitMap.size > 0 && Math.random() < 0.01)) {
     for (const [key, value] of rateLimitMap.entries()) {
       if (value.resetTime < now) {
         rateLimitMap.delete(key);
@@ -298,19 +298,28 @@ function validateFormData(data: ContactFormData): { valid: boolean; error?: stri
   if (!data.name || data.name.length < 2) {
     return { valid: false, error: 'Name must be at least 2 characters' };
   }
-  
+  if (data.name.length > 200) {
+    return { valid: false, error: 'Name is too long' };
+  }
+
   // Email validation
   if (!data.email) {
     return { valid: false, error: 'Email is required' };
   }
-  
+  if (data.email.length > 320) {
+    return { valid: false, error: 'Email is too long' };
+  }
+
   if (!validateEmail(data.email)) {
     return { valid: false, error: 'Invalid email format' };
   }
-  
+
   // Message validation
   if (!data.message || data.message.trim().length < 10) {
     return { valid: false, error: 'Message must be at least 10 characters' };
+  }
+  if (data.message.length > 5000) {
+    return { valid: false, error: 'Message is too long' };
   }
   
   // Turnstile token validation
@@ -330,10 +339,12 @@ async function sendEmail(
   contactEmail: string,
   isDevMode: boolean
 ): Promise<{ success: boolean; error?: string }> {
+  // Strip control characters from name to prevent email header injection
+  const sanitizedName = formData.name.replace(/\r/g, '');
   const emailBody = `
 New Contact Form Submission
 
-Name: ${formData.name}
+Name: ${sanitizedName}
 Email: ${formData.email}
 Message:
 ${formData.message}
@@ -347,7 +358,7 @@ Submitted at: ${new Date().toISOString()}
     console.log('📧 [DEV MODE] Email would be sent:');
     console.log('To:', contactEmail);
     console.log('From: noreply@trystan-tbm.dev');
-    console.log('Subject: Portfolio Contact:', formData.name);
+    console.log('Subject: Portfolio Contact:', sanitizedName);
     console.log('Body:', emailBody);
     return { success: true };
   }
@@ -369,7 +380,7 @@ Submitted at: ${new Date().toISOString()}
           email: 'noreply@trystan-tbm.dev',
           name: 'Portfolio Contact Form',
         },
-        subject: `Portfolio Contact: ${formData.name}`,
+        subject: `Portfolio Contact: ${sanitizedName}`,
         content: [
           {
             type: 'text/plain',
@@ -478,6 +489,19 @@ export default {
       return addCORSHeaders(response, origin, isDevMode);
     }
     
+    // Security: Reject oversized request bodies (50KB max)
+    const contentLength = request.headers.get('Content-Length');
+    if (contentLength && parseInt(contentLength, 10) > 50_000) {
+      const response = new Response(
+        JSON.stringify({ error: 'Request body too large' }),
+        {
+          status: 413,
+          headers: { 'Content-Type': 'application/json' },
+        }
+      );
+      return addCORSHeaders(response, origin, isDevMode);
+    }
+
     // Parse form data
     const formData = await parseFormData(request);
     

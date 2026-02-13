@@ -391,7 +391,7 @@ export function Contact() {
             />
 
             {/* Turnstile CAPTCHA */}
-            {turnstileSiteKey && (
+            {turnstileSiteKey ? (
               <div className="flex justify-center">
                 <Turnstile
                   siteKey={turnstileSiteKey}
@@ -413,7 +413,11 @@ export function Contact() {
                   ref={turnstileRef}
                 />
               </div>
-            )}
+            ) : import.meta.env.PROD ? (
+              <div className="p-4 bg-yellow-500/10 border border-yellow-500/50 rounded-lg text-center">
+                <p className="text-sm text-yellow-500">Contact form temporarily unavailable. Please reach out via LinkedIn.</p>
+              </div>
+            ) : null}
 
             {/* Success/Error Messages */}
             <div

@@ -1,4 +1,4 @@
-import { lazy, Suspense } from 'react';
+import { Component, lazy, Suspense, type ReactNode } from 'react';
 import { Hero } from './components/Hero';
 import { About } from './components/About';
 import { Experience } from './components/Experience';
@@ -10,11 +10,37 @@ import { Footer } from './components/Footer';
 import { ThemeToggle } from './components/ThemeToggle';
 
 // Lazy load ArchitectureShowcase (contains Mermaid.js - large dependency)
-const ArchitectureShowcase = lazy(() => 
-  import('./components/ArchitectureShowcase').then(module => ({ 
-    default: module.ArchitectureShowcase 
+const ArchitectureShowcase = lazy(() =>
+  import('./components/ArchitectureShowcase').then(module => ({
+    default: module.ArchitectureShowcase
   }))
 );
+
+class DiagramErrorBoundary extends Component<
+  { children: ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <section id="architecture" className="py-20 lg:py-32 bg-bg-secondary" aria-label="Architecture diagrams">
+          <div className="max-w-7xl mx-auto px-6">
+            <div className="text-center text-text-secondary">
+              Architecture diagrams could not be loaded.
+            </div>
+          </div>
+        </section>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 export function App() {
   return (
@@ -27,17 +53,19 @@ export function App() {
         <Hero />
         <About />
         <Experience />
-        <Suspense fallback={
-          <section id="architecture" className="py-20 lg:py-32 bg-bg-secondary" aria-label="Architecture diagrams">
-            <div className="max-w-7xl mx-auto px-6">
-              <div className="text-center text-text-secondary" role="status" aria-live="polite">
-                Loading architecture diagrams...
+        <DiagramErrorBoundary>
+          <Suspense fallback={
+            <section id="architecture" className="py-20 lg:py-32 bg-bg-secondary" aria-label="Architecture diagrams">
+              <div className="max-w-7xl mx-auto px-6">
+                <div className="text-center text-text-secondary" role="status" aria-live="polite">
+                  Loading architecture diagrams...
+                </div>
               </div>
-            </div>
-          </section>
-        }>
-          <ArchitectureShowcase />
-        </Suspense>
+            </section>
+          }>
+            <ArchitectureShowcase />
+          </Suspense>
+        </DiagramErrorBoundary>
         <Patents />
         <Skills />
         <Projects />

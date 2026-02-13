@@ -13,65 +13,12 @@ provider "cloudflare" {
   api_token = var.cloudflare_api_token
 }
 
-# Cloudflare Pages Project
-# This resource creates a Pages project that automatically deploys from GitHub
+# Cloudflare Pages Project (Direct Upload)
+# Frontend is built in CI with env vars and deployed via wrangler pages deploy
 resource "cloudflare_pages_project" "portfolio" {
-  # Account ID where the Pages project will be created
-  account_id = var.cloudflare_account_id
-
-  # Project name displayed in Cloudflare dashboard
-  name = "trystan-portfolio"
-
-  # Production branch that triggers automatic deployments
+  account_id        = var.cloudflare_account_id
+  name              = "trystan-portfolio"
   production_branch = "main"
-
-  # Build configuration for the deployment process (v5 argument syntax)
-  build_config = {
-    # Command to build the Vite + React project
-    build_command = "npm run build"
-
-    # Directory containing built artifacts after build completes
-    destination_dir = "dist"
-
-    # Root directory of the project (project root)
-    root_dir = "/"
-  }
-
-  # GitHub source configuration for automatic deployments (v5 argument syntax)
-  source = {
-    # Source type: GitHub integration
-    type = "github"
-
-    # GitHub repository configuration
-    config = {
-      # GitHub repository owner username
-      owner = var.github_repo_owner
-
-      # GitHub repository name
-      repo_name = var.github_repo_name
-
-      # Production branch to deploy from (triggers deployment on push)
-      production_branch = "main"
-    }
-  }
-
-  # Environment variables available during build process (v5 argument syntax)
-  # These are injected at build time for Vite to use
-  deployment_configs = {
-    production = {
-      environment_variables = {
-        # Turnstile site key for frontend CAPTCHA integration
-        # Vite requires VITE_ prefix to expose variables to client
-        VITE_TURNSTILE_SITE_KEY = var.turnstile_site_key
-      }
-    }
-    preview = {
-      environment_variables = {
-        # Same environment variable for preview deployments
-        VITE_TURNSTILE_SITE_KEY = var.turnstile_site_key
-      }
-    }
-  }
 }
 
 # Cloudflare Pages Custom Domain

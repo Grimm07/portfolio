@@ -37,12 +37,3 @@ variable "domain_name" {
   default     = "trystan-tbm.dev"
 }
 
-variable "github_repo_owner" {
-  description = "GitHub repository owner username (e.g., 'trystan-tbm')"
-  type        = string
-}
-
-variable "github_repo_name" {
-  description = "GitHub repository name (e.g., 'portfolio')"
-  type        = string
-}
