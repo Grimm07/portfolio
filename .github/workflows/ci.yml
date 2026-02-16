@@ -81,14 +81,14 @@ jobs:
 
       # Upload artifacts for downstream jobs
       - name: Upload frontend build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: frontend-dist
           path: dist/
           retention-days: 1
 
       - name: Upload worker build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: worker-dist
           path: worker/dist/
