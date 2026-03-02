@@ -107,7 +107,7 @@ jobs:
 
       # Download worker artifact (needed for terraform validate)
       - name: Download worker build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: worker-dist
           path: worker/dist/
@@ -157,13 +157,13 @@ jobs:
 
       # Download pre-built artifacts
       - name: Download frontend build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: frontend-dist
           path: dist/
 
       - name: Download worker build
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: worker-dist
           path: worker/dist/
