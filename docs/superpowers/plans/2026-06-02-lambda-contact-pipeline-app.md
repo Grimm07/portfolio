@@ -23,11 +23,11 @@ backend/
     shared/
       types.ts                 # ContactSubmission, ContactRecord, env interfaces
       validation.ts            # honeypot, time-trap, email, sanitize (ports + fixes worker logic)
-      secrets.ts               # getSecret() with per-container cache
+      secrets.ts               # getSecret() with per-container cache (used by the Notifier for CONTACT_EMAIL)
     ingest/
       ip.ts                    # extractClientIp() from XFF / CloudFront-Viewer-Address
-      turnstile.ts             # verifyTurnstile()
       rateLimit.ts             # checkRateLimit() via DynamoDB conditional update
+      # (no turnstile.ts — CAPTCHA is enforced by AWS WAF at the edge, not in the Lambda)
       store.ts                 # putMessageBody() (S3), putContactRecord() (DynamoDB)
       enqueue.ts               # enqueueNotification() (SQS)
       handler.ts               # Function URL handler wiring all of the above
@@ -159,8 +159,8 @@ export interface ContactSubmission {
   email: string;
   message: string;
   website: string;        // honeypot — must be empty
-  turnstileToken: string;
   formTimestamp: number;  // ms epoch when the form was rendered
+  // (no turnstileToken — AWS WAF CAPTCHA validates aws-waf-token at the edge, not in this body)
 }
 
 /** Message persisted to S3 (the full body). */
@@ -327,7 +327,7 @@ git commit -m "add contact validation (port worker logic + header-injection fix)
 
 ## Task 3: Secrets cache
 
-Fetches a secret string from Secrets Manager once per container and caches it.
+Fetches a secret string from Secrets Manager once per container and caches it. **Consumer: the Notifier Lambda, for `CONTACT_EMAIL`** (the Ingest Lambda holds no secrets after the CAPTCHA move). The module itself is a generic `getSecret` and is unchanged by that move.
 
 **Files:**
 - Create: `backend/src/shared/secrets.ts`
@@ -485,82 +485,9 @@ git commit -m "add client IP extraction (CloudFront viewer addr / XFF)"
 
 ---
 
-## Task 5: Turnstile verification
+## Task 5: ~~Turnstile verification~~ — REMOVED
 
-**Files:**
-- Create: `backend/src/ingest/turnstile.ts`
-- Test: `backend/test/ingest/turnstile.test.ts`
-
-- [ ] **Step 1: Write the failing test**
-
-```ts
-import { describe, it, expect, vi, afterEach } from 'vitest';
-import { verifyTurnstile } from '../../src/ingest/turnstile';
-
-afterEach(() => vi.restoreAllMocks());
-
-describe('verifyTurnstile', () => {
-  it('returns true when Cloudflare reports success', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      json: async () => ({ success: true }),
-    }));
-    expect(await verifyTurnstile('secret', 'token', '1.2.3.4')).toBe(true);
-  });
-
-  it('returns false when Cloudflare reports failure', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      json: async () => ({ success: false, 'error-codes': ['invalid-input-response'] }),
-    }));
-    expect(await verifyTurnstile('secret', 'bad', '1.2.3.4')).toBe(false);
-  });
-
-  it('fails closed when the network call throws', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('network')));
-    expect(await verifyTurnstile('secret', 'token', '1.2.3.4')).toBe(false);
-  });
-});
-```
-
-- [ ] **Step 2: Run test to verify it fails**
-
-Run: `cd backend && npx vitest run test/ingest/turnstile.test.ts`
-Expected: FAIL — module not found.
-
-- [ ] **Step 3: Write minimal implementation**
-
-```ts
-// backend/src/ingest/turnstile.ts
-const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
-
-/** Verify a Turnstile token. Fails CLOSED (returns false) on any error. */
-export async function verifyTurnstile(secret: string, token: string, ip: string): Promise<boolean> {
-  if (!token) return false;
-  try {
-    const body = new FormData();
-    body.append('secret', secret);
-    body.append('response', token);
-    if (ip && ip !== 'unknown') body.append('remoteip', ip);
-
-    const res = await fetch(VERIFY_URL, { method: 'POST', body });
-    const data = (await res.json()) as { success?: boolean };
-    return data.success === true;
-  } catch {
-    return false;
-  }
-}
-```
-
-- [ ] **Step 4: Run test to verify it passes**
-
-Run: `cd backend && npx vitest run test/ingest/turnstile.test.ts`
-Expected: PASS.
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add backend/src/ingest/turnstile.ts backend/test/ingest/turnstile.test.ts
-git commit -m "add Turnstile verification (fail-closed)"
-```
+**Removed by the "use AWS CAPTCHA" decision.** CAPTCHA is no longer verified in the Lambda; AWS WAF enforces it at the edge on the `/api/*` POST rule (the frontend obtains an `aws-waf-token` via the WAF CAPTCHA JS SDK; WAF validates it before the request reaches the Lambda). There is no `turnstile.ts` and no in-Lambda token verification. WAF CAPTCHA configuration lives in the infrastructure plan; the frontend widget swap is tracked separately. Skip directly to Task 6.
 
 ---
 
@@ -879,30 +806,29 @@ Wires validation → rate limit → persist → enqueue behind a Lambda Function
 - [ ] **Step 1: Write the failing test**
 
 ```ts
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { DynamoDBDocumentClient, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
 import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
-import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { handleIngest } from '../../src/ingest/handler';
-import { __clearSecretCache } from '../../src/shared/secrets';
 
 const s3 = mockClient(S3Client);
 const ddb = mockClient(DynamoDBDocumentClient);
 const sqs = mockClient(SQSClient);
-const sm = mockClient(SecretsManagerClient);
 
+// CAPTCHA is enforced by AWS WAF at the edge — the Lambda does NOT verify a token,
+// so there is no Secrets Manager client and no fetch stub here.
 const ENV = {
   MESSAGES_BUCKET: 'bucket', CONTACTS_TABLE: 'contacts', RATE_LIMIT_TABLE: 'rate-limits',
-  NOTIFICATION_QUEUE_URL: 'https://sqs/q', TURNSTILE_SECRET_ARN: 'arn:turnstile',
+  NOTIFICATION_QUEUE_URL: 'https://sqs/q',
 };
 
-// A valid submission: honeypot empty, old enough timestamp.
+// A valid submission: honeypot empty, old enough timestamp. No turnstileToken (WAF handles CAPTCHA).
 function event(overrides: Record<string, unknown> = {}) {
   const body = JSON.stringify({
     name: 'Alice', email: 'a@b.co', message: 'hello there',
-    website: '', turnstileToken: 'tok', formTimestamp: 0, ...overrides,
+    website: '', formTimestamp: 0, ...overrides,
   });
   return {
     headers: { 'x-forwarded-for': '1.2.3.4', 'user-agent': 'UA' },
@@ -913,21 +839,18 @@ function event(overrides: Record<string, unknown> = {}) {
 const deps = () => ({
   env: ENV,
   clients: {
-    s3: new S3Client({}), doc: DynamoDBDocumentClient.from({} as never),
-    sqs: new SQSClient({}), secrets: new SecretsManagerClient({}),
+    s3: new S3Client({}), doc: DynamoDBDocumentClient.from({} as never), sqs: new SQSClient({}),
   },
   now: () => 10_000, // 10s > MIN_FORM_TIME_MS past formTimestamp=0
   uuid: () => 'fixed-id',
 });
 
 beforeEach(() => {
-  s3.reset(); ddb.reset(); sqs.reset(); sm.reset(); __clearSecretCache();
-  sm.on(GetSecretValueCommand).resolves({ SecretString: 'turnstile-secret' });
+  s3.reset(); ddb.reset(); sqs.reset();
   ddb.on(UpdateCommand).resolves({});
   ddb.on(PutCommand).resolves({});
   s3.on(PutObjectCommand).resolves({});
   sqs.on(SendMessageCommand).resolves({ MessageId: 'm1' });
-  vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: async () => ({ success: true }) }));
 });
 
 describe('handleIngest', () => {
@@ -958,12 +881,6 @@ describe('handleIngest', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('rejects a failed Turnstile token with 403', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ json: async () => ({ success: false }) }));
-    const res = await handleIngest(event(), deps());
-    expect(res.statusCode).toBe(403);
-  });
-
   it('returns 429 when rate limited', async () => {
     const err = new Error('limit'); err.name = 'ConditionalCheckFailedException';
     ddb.on(UpdateCommand).rejects(err);
@@ -992,18 +909,14 @@ Expected: FAIL — module not found.
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import type { SQSClient } from '@aws-sdk/client-sqs';
-import type { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { S3Client as S3 } from '@aws-sdk/client-s3';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient as Doc } from '@aws-sdk/lib-dynamodb';
 import { SQSClient as SQS } from '@aws-sdk/client-sqs';
-import { SecretsManagerClient as SM } from '@aws-sdk/client-secrets-manager';
 
 import type { ContactSubmission, StoredMessage, ContactRecord, NotificationMessage } from '../shared/types';
 import { isHoneypotTripped, isTooFast, isValidEmail, sanitizeName, MAX_MESSAGE } from '../shared/validation';
-import { getSecret } from '../shared/secrets';
 import { extractClientIp } from './ip';
-import { verifyTurnstile } from './turnstile';
 import { checkRateLimit } from './rateLimit';
 import { putMessageBody, putContactRecord } from './store';
 import { enqueueNotification } from './enqueue';
@@ -1013,12 +926,11 @@ export interface IngestEnv {
   CONTACTS_TABLE: string;
   RATE_LIMIT_TABLE: string;
   NOTIFICATION_QUEUE_URL: string;
-  TURNSTILE_SECRET_ARN: string;
 }
 
 export interface IngestDeps {
   env: IngestEnv;
-  clients: { s3: S3Client; doc: DynamoDBDocumentClient; sqs: SQSClient; secrets: SecretsManagerClient };
+  clients: { s3: S3Client; doc: DynamoDBDocumentClient; sqs: SQSClient };
   now: () => number;
   uuid: () => string;
 }
@@ -1061,11 +973,8 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
 
   const ip = extractClientIp(event.headers);
 
-  // Layer 4: Turnstile.
-  const secret = await getSecret(clients.secrets, env.TURNSTILE_SECRET_ARN);
-  if (!(await verifyTurnstile(secret, sub.turnstileToken, ip))) {
-    return json(403, { error: 'Verification failed' });
-  }
+  // NOTE: CAPTCHA (human verification) is enforced by AWS WAF at the edge before the
+  // request reaches this Lambda — there is no token check here.
 
   // Layer 1: rate limit (after cheap checks, before writes).
   const nowSec = Math.floor(now() / 1000);
@@ -1101,13 +1010,11 @@ const env: IngestEnv = {
   CONTACTS_TABLE: process.env.CONTACTS_TABLE!,
   RATE_LIMIT_TABLE: process.env.RATE_LIMIT_TABLE!,
   NOTIFICATION_QUEUE_URL: process.env.NOTIFICATION_QUEUE_URL!,
-  TURNSTILE_SECRET_ARN: process.env.TURNSTILE_SECRET_ARN!,
 };
 const clients = {
   s3: new S3({}),
   doc: Doc.from(new DynamoDBClient({})),
   sqs: new SQS({}),
-  secrets: new SM({}),
 };
 
 export const handler = (event: FunctionUrlEvent): Promise<FunctionUrlResult> =>
@@ -1117,7 +1024,7 @@ export const handler = (event: FunctionUrlEvent): Promise<FunctionUrlResult> =>
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd backend && npx vitest run test/ingest/handler.test.ts`
-Expected: PASS (all 7 cases).
+Expected: PASS (all 6 cases).
 
 - [ ] **Step 5: Commit**
 
@@ -1427,10 +1334,23 @@ export async function handleNotify(event: SQSEvent, deps: NotifyDeps): Promise<B
 }
 
 // --- Lambda entrypoint ---
-const env: NotifyEnv = { CONTACT_EMAIL: process.env.CONTACT_EMAIL!, FROM_EMAIL: process.env.FROM_EMAIL! };
+// CONTACT_EMAIL is resolved from Secrets Manager (cached per container by getSecret);
+// FROM_EMAIL (noreply@<domain>) is non-sensitive and stays an env var.
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { getSecret } from '../shared/secrets';
+
+const FROM_EMAIL = process.env.FROM_EMAIL!;
+const CONTACT_EMAIL_SECRET_ARN = process.env.CONTACT_EMAIL_SECRET_ARN!;
 const clients = { s3: new S3({}), ses: new SES({}) };
-export const handler = (event: SQSEvent): Promise<BatchResponse> => handleNotify(event, { env, clients });
+const secrets = new SecretsManagerClient({});
+
+export const handler = async (event: SQSEvent): Promise<BatchResponse> => {
+  const contactEmail = await getSecret(secrets, CONTACT_EMAIL_SECRET_ARN);
+  return handleNotify(event, { env: { CONTACT_EMAIL: contactEmail, FROM_EMAIL }, clients });
+};
 ```
+
+> Note: `handleNotify` still takes a resolved `CONTACT_EMAIL` string, so the unit test in Step 1 needs no Secrets Manager mock — only the entrypoint touches Secrets Manager.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1486,20 +1406,21 @@ git commit -m "ignore backend build output; full suite green"
 ## Self-Review
 
 **Spec coverage (against `2026-06-02-lambda-contact-pipeline-design.md`):**
-- §5 ingest validation (honeypot/time-trap/Turnstile/email) → Tasks 2, 5, 9 ✓
+- §5 ingest validation (honeypot/time-trap/email) → Tasks 2, 9 ✓
+- §3/§5 CAPTCHA — enforced by AWS WAF at the edge, **not** application code → no app task (infra plan) ✓
 - §5/§7 rate limiting (DynamoDB conditional, 3/hr) → Task 6, wired in Task 9 ✓
 - §5 S3 body + §6 DynamoDB per-person record (PK=EMAIL#, SK=SUB#, GSI1 ALL) → Tasks 1, 7, 9 ✓
 - §5 SQS enqueue → Tasks 8, 9 ✓
 - §3/§5 batched SES digest + ReportBatchItemFailures → Tasks 10, 11, 12 ✓
 - §7 raw IP stored → Tasks 1 (`ip` field), 4, 9 ✓
-- §7 Secrets Manager (Turnstile secret, cached) → Tasks 3, 9 ✓
+- §3/§7 Secrets Manager (`CONTACT_EMAIL` only, cached) → Tasks 3, 12 (notifier entrypoint) ✓
 - Client IP from XFF/viewer-address → Task 4 ✓
 - Bug-review fixes (header-injection name sanitize, email caps) → Task 2 ✓
 
-**Deferred to the infra plan (correctly NOT in this plan):** CloudFront `/api/*` behavior + OAC, Function URL + IAM, `AllViewerExceptHostHeader`, WAF rate rule, SES domain/DKIM verification, Secrets Manager *resource* creation, SQS `BatchSize`/`MaximumBatchingWindowInSeconds` (300s) + DLQ wiring, DynamoDB table/TTL/GSI definitions, IAM roles, CI/OIDC. The application code is written to consume these via env vars and injected clients.
+**Deferred to the infra plan (correctly NOT in this plan):** CloudFront `/api/*` behavior + OAC, Function URL + IAM, `AllViewerExceptHostHeader`, **WAF CAPTCHA action + rate rule**, SES domain/DKIM verification, Secrets Manager *resource* creation (`CONTACT_EMAIL`), SQS `BatchSize`/`MaximumBatchingWindowInSeconds` (300s) + DLQ wiring, DynamoDB table/TTL/GSI definitions, IAM roles, CI/OIDC. The application code is written to consume these via env vars and injected clients. **Frontend WAF CAPTCHA JS SDK swap is tracked separately from this backend plan.**
 
 **Placeholder scan:** none — every code step contains complete implementation and tests.
 
-**Type consistency:** `StoredMessage`, `ContactRecord`, `NotificationMessage`, `Digest`, `IngestEnv`/`IngestDeps`, `NotifyEnv`/`NotifyDeps` are defined once and used consistently. `composeDigest` returns `{subject, body, replyTo}` and is consumed identically in Tasks 11–12. `checkRateLimit`/`putMessageBody`/`putContactRecord`/`enqueueNotification`/`getSecret`/`verifyTurnstile`/`extractClientIp` signatures match their call sites in Task 9. Notifier `handleNotify` returns `{batchItemFailures}` matching the SQS partial-batch-response contract.
+**Type consistency:** `StoredMessage`, `ContactRecord`, `NotificationMessage`, `Digest`, `IngestEnv`/`IngestDeps`, `NotifyEnv`/`NotifyDeps` are defined once and used consistently. `composeDigest` returns `{subject, body, replyTo}` and is consumed identically in Tasks 11–12. `checkRateLimit`/`putMessageBody`/`putContactRecord`/`enqueueNotification`/`extractClientIp` signatures match their call sites in the Task 9 ingest handler (which no longer references Turnstile or Secrets Manager). `getSecret` is consumed only by the Task 12 notifier entrypoint. Notifier `handleNotify` returns `{batchItemFailures}` matching the SQS partial-batch-response contract.
 
 **Note on `crypto.randomUUID()`:** available as a Node global in the Lambda Node 20 runtime; injected via `deps.uuid` in tests so no real randomness is needed under test.

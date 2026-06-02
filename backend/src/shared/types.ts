@@ -4,8 +4,8 @@ export interface ContactSubmission {
   email: string;
   message: string;
   website: string;        // honeypot — must be empty
-  turnstileToken: string;
   formTimestamp: number;  // ms epoch when the form was rendered
+  // (no turnstileToken — AWS WAF CAPTCHA validates aws-waf-token at the edge, not in this body)
 }
 
 /** Message persisted to S3 (the full body). */
