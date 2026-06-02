@@ -3,8 +3,8 @@
 - **Date:** 2026-06-02
 - **Status:** Approved design (pre-implementation)
 - **Supersedes decision:** "keep the Worker on Cloudflare for now" — the contact backend moves off Cloudflare Workers to AWS.
-- **Related:** Cloudflare→hybrid CDN migration (Cloudflare DNS + AWS CloudFront/S3). This backend work shares that migration's CloudFront distribution and AWS/Cloudflare Terraform providers.
-- **Deferred:** OpenTelemetry tracing design (rebases onto Lambda; see §8).
+- **Related:** Cloudflare→hybrid CDN migration (Cloudflare DNS + AWS CloudFront/S3). This backend work shares that migration's CloudFront distribution and AWS/Cloudflare OpenTofu providers.
+- **Observability:** Full AWS-native — CloudWatch RUM (browser) + AWS X-Ray via ADOT (Lambdas) + CloudWatch. No third-party APM. Detailed tracing design deferred (see §8).
 
 ## 1. Goal & scope
 
@@ -60,8 +60,9 @@ Two decoupled paths. **Ingest** is synchronous (browser-facing, fast, durable). 
 | Message storage | **Body in S3, pointer in DynamoDB** | Keeps Dynamo items small; bodies can be long. |
 | Rate limiting | **WAF rate rule (edge) + DynamoDB precise counter (3/hr/IP)** | Belt-and-suspenders; finally a correct, shared limit (in-memory Map never worked across isolates). |
 | Secrets | **AWS Secrets Manager** (+ Secrets Lambda Extension cache) | TURNSTILE_SECRET_KEY + CONTACT_EMAIL kept out of env/git. |
-| Client IP | **`X-Forwarded-For` / `CloudFront-Viewer-Address`** | Replaces `CF-Connecting-IP`. |
-| IaC | **Terraform** (extends the Cloudflare+AWS config from the CDN migration) | One tool for Cloudflare DNS + AWS resources. |
+| Client IP | **`X-Forwarded-For` / `CloudFront-Viewer-Address`**, **stored raw** | Replaces `CF-Connecting-IP`. Raw (un-hashed) IP retained for abuse investigation. |
+| Observability | **Full AWS-native**: CloudWatch RUM (browser) + X-Ray/ADOT (Lambdas) + CloudWatch | No third-party APM; native end-to-end trace map. |
+| IaC | **OpenTofu** (extends the Cloudflare+AWS config from the CDN migration) | One tool for Cloudflare DNS + AWS resources; HCL-compatible, same provider ecosystem. |
 | Retention | **Keep indefinitely**, encrypted at rest | User wants a durable record; TTL/lifecycle can be added later. |
 
 ## 4. Components
@@ -84,7 +85,7 @@ Two decoupled paths. **Ingest** is synchronous (browser-facing, fast, durable). 
 1. CloudFront `/api/*` → Ingest Lambda (Function URL).
 2. Extract client IP from `X-Forwarded-For` / `CloudFront-Viewer-Address`.
 3. Validate: honeypot (`website` empty) → time-trap (≥3s) → Turnstile verify (secret from Secrets Manager, cached) → email format.
-4. Rate limit: conditional update on `rate-limits` (`PK=IP#<hash>`, TTL=now+1h); reject if >3 in window.
+4. Rate limit: conditional update on `rate-limits` (`PK=IP#<raw-ip>`, TTL=now+1h); reject if >3 in window.
 5. Generate `id` (UUID v4).
 6. `PutObject` body → S3 `messages/{yyyy}/{mm}/{id}.json`.
 7. `PutItem` → `contacts` (record + `s3Key`).
@@ -106,7 +107,7 @@ Persist-before-enqueue: if SQS send fails after S3+Dynamo writes, the record sti
 ```
 PK  = EMAIL#<lowercased email>
 SK  = SUB#<ISO-8601 timestamp>#<id>     ← one item per submission
-attrs: name, ipHash, userAgent, createdAt, s3Bucket, s3Key, status
+attrs: name, ip, userAgent, createdAt, s3Bucket, s3Key, status
 GSI1: GSI1PK = "ALL", GSI1SK = createdAt   ← list everyone / recent contacts
 ```
 - A person's full history: `Query PK = EMAIL#…`.
@@ -121,7 +122,7 @@ messages/{yyyy}/{mm}/{id}.json  =  { name, email, message, createdAt, meta }
 
 ### `rate-limits` table
 ```
-PK = IP#<hash>
+PK = IP#<raw-ip>
 attrs: count, windowStart
 TTL = expiresAt (now + 1h)   ← DynamoDB TTL auto-evicts
 ```
@@ -131,19 +132,25 @@ TTL = expiresAt (now + 1h)   ← DynamoDB TTL auto-evicts
 - **Edge (WAF):** rate-based rule on the CloudFront WebACL throttles volumetric floods before Lambda.
 - **Precise (DynamoDB):** conditional-update counter enforces 3/hour/IP — a correct, shared limit.
 - **Function URL lockdown:** `AuthType=AWS_IAM` + CloudFront OAC (SigV4-signed origin requests) so the raw `*.lambda-url…on.aws` host can't be hit directly.
-- **PII minimization:** client IP stored **hashed**; S3/Dynamo encrypted at rest (default); Block-Public-Access; least-privilege IAM per Lambda; `CONTACT_EMAIL` in Secrets Manager, not env/git. Honors the project's privacy-first posture (SECURITY.md).
+- **PII posture:** client IP stored **raw** (deliberate — retained for abuse investigation; documented trade against the project's privacy-first default). Compensating controls: S3/Dynamo encrypted at rest (default); Block-Public-Access; least-privilege IAM per Lambda; `CONTACT_EMAIL` in Secrets Manager, not env/git. (If retention of raw IPs later becomes a concern, add a DynamoDB TTL to age them out.)
 - **Secrets:** `TURNSTILE_SECRET_KEY` + `CONTACT_EMAIL` in Secrets Manager, fetched via the **AWS Parameters and Secrets Lambda Extension** (cached per container) to avoid per-invocation fetch latency/cost. SES uses the Lambda **IAM role**, no stored credential.
 
-## 8. Tracing rebase (deferred)
+## 8. Observability — full AWS-native (deferred detailed design)
 
-Backend on Lambda changes OTel from `@microlabs/otel-cf-workers` to the **ADOT Lambda layer** (auto-spans for the handler + AWS SDK calls → S3/Dynamo/SQS/SES appear as child spans), exporting OTLP to Honeycomb. The browser's Worker-OTLP-proxy is replaced by either a tiny **collector behind CloudFront `/api/v1/traces`** or a reconsideration of **AWS-native RUM + X-Ray** (now a natural fit). **Designed separately**; the paused OTel tasks resume after this backend lands.
+No third-party APM (Honeycomb dropped). Everything lands in CloudWatch with a native end-to-end trace map:
+
+- **Backend (Lambdas):** enable **X-Ray active tracing**; instrument with the **ADOT (AWS Distro for OpenTelemetry) Lambda layer** so the handler plus AWS SDK calls (S3 / DynamoDB / SQS / SES) appear as child segments. SQS context propagation links the Ingest segment to the Notifier segment, so a submission traces ingest → queue → digest send.
+- **Browser:** **CloudWatch RUM** via the `aws-rum-web` client (page-load timing, JS errors, HTTP requests), with **X-Ray trace linking** enabled so a browser session stitches to the Lambda segments in the X-Ray trace map. RUM's web client authenticates via a **Cognito identity pool** (unauthenticated identities) — an added resource versus the dropped Worker-proxy approach, but fully AWS-native.
+- **Logs/metrics:** Lambda logs to CloudWatch Logs; alarms on DLQ depth, Lambda errors, and SES bounce rate.
+
+This removes the Worker OTLP-proxy, the Honeycomb secret, and the browser bundle's OTel SDK entirely (`aws-rum-web` replaces it). **Detailed design (Cognito pool, RUM app monitor config, ADOT layer wiring, X-Ray sampling) is deferred to its own spec** after this backend lands. The earlier Honeycomb/`otel-cf-workers` design is obsolete.
 
 ## 9. IaC & deployment
 
-- **Terraform**, extending the Cloudflare (DNS/DKIM) + AWS (with `us-east-1` alias for the CloudFront ACM cert) providers introduced by the CDN migration. One tool, one `apply`.
+- **OpenTofu**, extending the Cloudflare (DNS/DKIM) + AWS (with `us-east-1` alias for the CloudFront ACM cert) providers introduced by the CDN migration. One tool, one `tofu apply`. HCL + provider ecosystem are Terraform-compatible, so resource definitions are unchanged from standard Terraform.
 - **Build:** Lambdas bundled with esbuild (same toolchain as the Worker) → zip → `aws_lambda_function`.
 - **Secrets:** `aws_secretsmanager_secret` + `aws_secretsmanager_secret_version`; values supplied out-of-band (consistent with the existing gitignored-tfvars / env-secret pattern).
-- **CI** (`.github/workflows/ci.yml`): add an AWS **OIDC** role (`id-token: write`); deploy = build Lambdas + `terraform apply` + frontend `aws s3 sync` + CloudFront invalidation. `VITE_TURNSTILE_SITE_KEY` still embedded at build time.
+- **CI** (`.github/workflows/ci.yml`): add an AWS **OIDC** role (`id-token: write`); deploy = build Lambdas + `tofu apply` + frontend `aws s3 sync` + CloudFront invalidation. `VITE_TURNSTILE_SITE_KEY` still embedded at build time.
 
 ## 10. Error handling & resilience
 
@@ -167,7 +174,8 @@ Backend on Lambda changes OTel from `@microlabs/otel-cf-workers` to the **ADOT L
 
 ## 13. Open items / assumptions
 
-- IaC = Terraform (one tool with DNS/CDN work). *(Confirm; alternative SAM/CDK.)*
-- Retention = keep indefinitely, encrypted. *(TTL/lifecycle addable later.)*
-- Tracing deferred to its own design.
+- IaC = **OpenTofu** (one tool with DNS/CDN work).
+- Client IP = **stored raw** (not hashed), retained for abuse investigation.
+- Observability = **full AWS-native** (CloudWatch RUM + X-Ray/ADOT); detailed design deferred to its own spec.
+- Retention = keep indefinitely, encrypted. *(TTL/lifecycle addable later — also the escape hatch for raw-IP retention.)*
 - SQS `BatchSize` exact value (e.g., 10) tuned during implementation.
