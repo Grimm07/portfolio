@@ -37,3 +37,31 @@ resource "aws_lambda_function_url" "ingest" {
   function_name      = aws_lambda_function.ingest.function_name
   authorization_type = "AWS_IAM"
 }
+
+resource "aws_lambda_function" "notifier" {
+  function_name    = "${local.name_prefix}-notifier"
+  role             = aws_iam_role.notifier.arn
+  runtime          = "nodejs20.x"
+  handler          = "index.handler"
+  filename         = data.archive_file.notifier.output_path
+  source_code_hash = data.archive_file.notifier.output_base64sha256
+  timeout          = 60
+  memory_size      = 256
+
+  environment {
+    variables = {
+      FROM_EMAIL               = local.from_email
+      CONTACT_EMAIL_SECRET_ARN = aws_secretsmanager_secret.contact_email.arn
+    }
+  }
+}
+
+# Batch bursts into one digest: collect up to 10 messages or 300s, whichever first.
+# ReportBatchItemFailures lets the handler re-queue only failed records.
+resource "aws_lambda_event_source_mapping" "notifier" {
+  event_source_arn                   = aws_sqs_queue.notifications.arn
+  function_name                      = aws_lambda_function.notifier.arn
+  batch_size                         = 10
+  maximum_batching_window_in_seconds = 300
+  function_response_types            = ["ReportBatchItemFailures"]
+}
