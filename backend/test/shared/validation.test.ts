@@ -3,8 +3,10 @@ import {
   isHoneypotTripped,
   isTooFast,
   isValidEmail,
+  isValidMessage,
   sanitizeName,
   MIN_FORM_TIME_MS,
+  MAX_MESSAGE,
 } from '../../src/shared/validation';
 
 describe('isHoneypotTripped', () => {
@@ -36,6 +38,24 @@ describe('isValidEmail', () => {
     expect(isValidEmail('nope')).toBe(false);
     expect(isValidEmail('a@b')).toBe(false);
     expect(isValidEmail('x'.repeat(255) + '@b.co')).toBe(false);
+  });
+});
+
+describe('isValidMessage', () => {
+  it('accepts a valid non-empty string', () => {
+    expect(isValidMessage('hello there')).toBe(true);
+  });
+  it('rejects an empty string', () => {
+    expect(isValidMessage('')).toBe(false);
+  });
+  it('rejects a non-string (number)', () => {
+    expect(isValidMessage(123)).toBe(false);
+  });
+  it('rejects a string over MAX_MESSAGE length', () => {
+    expect(isValidMessage('a'.repeat(MAX_MESSAGE + 1))).toBe(false);
+  });
+  it('accepts a string exactly at MAX_MESSAGE length', () => {
+    expect(isValidMessage('a'.repeat(MAX_MESSAGE))).toBe(true);
   });
 });
 

@@ -1,7 +1,13 @@
 // backend/src/ingest/ip.ts
 type Headers = Record<string, string | undefined>;
 
-/** CloudFront-Viewer-Address is "<ip>:<port>"; the port is after the LAST colon. */
+/**
+ * Strip the port from a CloudFront-Viewer-Address value.
+ * CloudFront always formats this header as `<ip>:<port>`, even for IPv6
+ * (which is sent unbracketed, e.g. `2001:db8::1:443`).  Cutting after the
+ * last colon is therefore correct for both address families.
+ * X-Forwarded-For entries carry no port and are NOT passed through this function.
+ */
 function stripPort(value: string): string {
   const i = value.lastIndexOf(':');
   return i === -1 ? value : value.slice(0, i);

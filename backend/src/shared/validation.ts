@@ -17,6 +17,10 @@ export function isValidEmail(email: string): boolean {
   return typeof email === 'string' && email.length <= MAX_EMAIL && EMAIL_RE.test(email);
 }
 
+export function isValidMessage(message: unknown): boolean {
+  return typeof message === 'string' && message.length > 0 && message.length <= MAX_MESSAGE;
+}
+
 /** Strip all control characters and cap length (fixes Worker header-injection bug). */
 export function sanitizeName(name: string): string {
   // eslint-disable-next-line no-control-regex

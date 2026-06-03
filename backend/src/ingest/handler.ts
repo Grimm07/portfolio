@@ -8,7 +8,7 @@ import { DynamoDBDocumentClient as Doc } from '@aws-sdk/lib-dynamodb';
 import { SQSClient as SQS } from '@aws-sdk/client-sqs';
 
 import type { ContactSubmission, StoredMessage, ContactRecord, NotificationMessage } from '../shared/types';
-import { isHoneypotTripped, isTooFast, isValidEmail, sanitizeName, MAX_MESSAGE } from '../shared/validation';
+import { isHoneypotTripped, isTooFast, isValidEmail, isValidMessage, sanitizeName } from '../shared/validation';
 import { extractClientIp } from './ip';
 import { checkRateLimit } from './rateLimit';
 import { putMessageBody, putContactRecord } from './store';
@@ -45,24 +45,35 @@ function json(statusCode: number, payload: unknown): FunctionUrlResult {
 export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): Promise<FunctionUrlResult> {
   const { env, clients, now, uuid } = deps;
 
-  let sub: ContactSubmission;
+  // Snapshot now() once — reused for time-trap, rate-limit seconds, and createdAt.
+  const ts = now();
+
+  let parsed: unknown;
   try {
-    sub = JSON.parse(event.body ?? '') as ContactSubmission;
+    parsed = JSON.parse(event.body ?? '');
   } catch {
     return json(400, { error: 'Invalid request' });
   }
+  if (typeof parsed !== 'object' || parsed === null) return json(400, { error: 'Invalid request' });
+  const sub = parsed as Partial<ContactSubmission>;
 
   // Layer 2: honeypot — silently accept (200) so bots get no signal, but persist nothing.
   if (isHoneypotTripped(sub)) return json(200, { ok: true });
 
   // Layer 3: time-trap.
-  if (typeof sub.formTimestamp !== 'number' || isTooFast(sub.formTimestamp, now())) {
+  if (typeof sub.formTimestamp !== 'number' || isTooFast(sub.formTimestamp, ts)) {
     return json(400, { error: 'Submission too fast' });
   }
 
-  // Layer 5: email shape (cheap) before the network call.
-  if (!isValidEmail(sub.email)) return json(400, { error: 'Invalid email' });
-  if (!sub.message || sub.message.length > MAX_MESSAGE) return json(400, { error: 'Invalid message' });
+  // Layer 5: field validation (cheap) before the network call.
+  if (typeof sub.email !== 'string' || !isValidEmail(sub.email)) return json(400, { error: 'Invalid email' });
+  if (typeof sub.name !== 'string' || sub.name.trim().length === 0) return json(400, { error: 'Invalid name' });
+  if (!isValidMessage(sub.message)) return json(400, { error: 'Invalid message' });
+
+  // Narrowed to string after guards above.
+  const rawEmail: string = sub.email;
+  const rawName: string = sub.name;
+  const rawMessage: string = sub.message as string;
 
   const ip = extractClientIp(event.headers);
 
@@ -70,18 +81,18 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
   // request reaches this Lambda — there is no token check here.
 
   // Layer 1: rate limit (after cheap checks, before writes).
-  const nowSec = Math.floor(now() / 1000);
+  const nowSec = Math.floor(ts / 1000);
   if (!(await checkRateLimit(clients.doc, env.RATE_LIMIT_TABLE, ip, nowSec))) {
     return json(429, { error: 'Too many requests' });
   }
 
   // Persist.
   const id = uuid();
-  const createdAt = new Date(now()).toISOString();
-  const name = sanitizeName(sub.name);
-  const email = sub.email.toLowerCase();
+  const createdAt = new Date(ts).toISOString();
+  const name = sanitizeName(rawName);
+  const email = rawEmail.toLowerCase();
 
-  const message: StoredMessage = { id, name, email, message: sub.message, createdAt, ip, userAgent: event.headers['user-agent'] ?? '' };
+  const message: StoredMessage = { id, name, email, message: rawMessage, createdAt, ip, userAgent: event.headers['user-agent'] ?? '' };
   const s3Key = await putMessageBody(clients.s3, env.MESSAGES_BUCKET, message);
 
   const record: ContactRecord = {

@@ -14,14 +14,14 @@ describe('getSecret', () => {
   it('fetches the secret value', async () => {
     smMock.on(GetSecretValueCommand).resolves({ SecretString: 's3cr3t' });
     const client = new SecretsManagerClient({});
-    expect(await getSecret(client, 'arn:turnstile')).toBe('s3cr3t');
+    expect(await getSecret(client, 'arn:contact-email')).toBe('s3cr3t');
   });
 
   it('caches by ARN — second call does not hit the API', async () => {
     smMock.on(GetSecretValueCommand).resolves({ SecretString: 's3cr3t' });
     const client = new SecretsManagerClient({});
-    await getSecret(client, 'arn:turnstile');
-    await getSecret(client, 'arn:turnstile');
+    await getSecret(client, 'arn:contact-email');
+    await getSecret(client, 'arn:contact-email');
     expect(smMock.commandCalls(GetSecretValueCommand)).toHaveLength(1);
   });
 

@@ -87,4 +87,29 @@ describe('handleIngest', () => {
     const res = await handleIngest(bad, deps());
     expect(res.statusCode).toBe(400);
   });
+
+  it('returns 400 when body is JSON null (non-object body)', async () => {
+    const bad = { headers: { 'x-forwarded-for': '1.2.3.4' }, body: 'null' } as never;
+    const res = await handleIngest(bad, deps());
+    expect(res.statusCode).toBe(400);
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+  });
+
+  it('returns 400 when message is a number (non-string field)', async () => {
+    const res = await handleIngest(
+      event({ message: 123 }),
+      deps(),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+  });
+
+  it('returns 400 when name is a number (non-string name)', async () => {
+    const res = await handleIngest(
+      event({ name: 123 }),
+      deps(),
+    );
+    expect(res.statusCode).toBe(400);
+    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+  });
 });
