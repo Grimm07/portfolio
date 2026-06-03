@@ -37,3 +37,9 @@ variable "domain_name" {
   default     = "trystan-tbm.dev"
 }
 
+variable "aws_region" {
+  description = "AWS region for all contact backend resources"
+  type        = string
+  default     = "us-east-1"
+}
+
