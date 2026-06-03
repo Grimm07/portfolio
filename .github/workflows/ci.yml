@@ -42,6 +42,36 @@ jobs:
         run: npm run test:run
 
   # =============================================================================
+  # SECURITY AUDIT JOB - npm audit across all three workspaces
+  # Starts NON-BLOCKING (|| true) to avoid breaking CI on pre-existing dev-tool
+  # noise. TODO: remove the "|| true" and tighten to a hard gate now that all
+  # three workspaces are confirmed clean (Plan S Tasks 1-4) and stay green.
+  # =============================================================================
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Audit root (frontend)
+        run: npm audit --audit-level=high || true
+
+      - name: Audit worker
+        working-directory: worker
+        run: npm audit --audit-level=high || true
+
+      - name: Audit backend
+        working-directory: backend
+        run: npm audit --audit-level=high || true
+
+  # =============================================================================
   # BUILD JOB - Build frontend and worker, upload artifacts for reuse
   # =============================================================================
   build:
