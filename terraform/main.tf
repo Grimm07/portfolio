@@ -6,6 +6,14 @@ terraform {
       source  = "cloudflare/cloudflare"
       version = "~> 5.16"
     }
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.70"
+    }
+    archive = {
+      source  = "hashicorp/archive"
+      version = "~> 2.6"
+    }
   }
 }
 

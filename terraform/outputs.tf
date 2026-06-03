@@ -23,3 +23,28 @@ output "turnstile_site_key" {
   value       = var.turnstile_site_key
   sensitive   = false
 }
+
+output "ingest_function_url" {
+  description = "Lambda Function URL for the ingest handler (IAM-auth; fronted by CloudFront in Plan 2b)"
+  value       = aws_lambda_function_url.ingest.function_url
+}
+
+output "ingest_function_name" {
+  description = "Ingest Lambda function name (for aws lambda invoke testing)"
+  value       = aws_lambda_function.ingest.function_name
+}
+
+output "notifications_queue_url" {
+  description = "SQS notifications queue URL"
+  value       = aws_sqs_queue.notifications.url
+}
+
+output "messages_bucket" {
+  description = "S3 bucket holding contact message bodies"
+  value       = aws_s3_bucket.messages.id
+}
+
+output "contacts_table" {
+  description = "DynamoDB contacts table name"
+  value       = aws_dynamodb_table.contacts.name
+}
