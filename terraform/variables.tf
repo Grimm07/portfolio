@@ -14,11 +14,6 @@ variable "cloudflare_zone_id" {
   type        = string
 }
 
-variable "turnstile_site_key" {
-  description = "Cloudflare Turnstile site key for CAPTCHA"
-  type        = string
-}
-
 variable "turnstile_secret_key" {
   description = "Cloudflare Turnstile secret key for CAPTCHA verification"
   type        = string
