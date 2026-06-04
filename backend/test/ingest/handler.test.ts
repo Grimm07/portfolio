@@ -99,15 +99,25 @@ describe('handleIngest', () => {
     expect(res.statusCode).toBe(400);
   });
 
+  it('decodes a base64-encoded body (API Gateway v2) and returns 200', async () => {
+    const raw = JSON.stringify({ name: 'Alice', email: 'a@b.co', message: 'hello there', website: '', formTimestamp: 0 });
+    const b64 = { headers: baseHeaders(), body: Buffer.from(raw, 'utf8').toString('base64'), isBase64Encoded: true } as never;
+    const res = await handleIngest(b64, deps());
+    expect(res.statusCode).toBe(200);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(1);
+  });
+
   it('rejects a request missing x-origin-verify with 403 and sends nothing', async () => {
-    const noHeader = { headers: { 'x-forwarded-for': '1.2.3.4' }, body: event().body } as never;
+    const validBody = JSON.stringify({ name: 'Alice', email: 'a@b.co', message: 'hello there', website: '', formTimestamp: 0 });
+    const noHeader = { headers: { 'x-forwarded-for': '1.2.3.4' }, body: validBody } as never;
     const res = await handleIngest(noHeader, deps());
     expect(res.statusCode).toBe(403);
     expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 
   it('rejects a wrong x-origin-verify with 403 and sends nothing', async () => {
-    const wrong = { headers: baseHeaders({ 'x-origin-verify': 'nope' }), body: event().body } as never;
+    const validBody = JSON.stringify({ name: 'Alice', email: 'a@b.co', message: 'hello there', website: '', formTimestamp: 0 });
+    const wrong = { headers: baseHeaders({ 'x-origin-verify': 'nope' }), body: validBody } as never;
     const res = await handleIngest(wrong, deps());
     expect(res.statusCode).toBe(403);
     expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);

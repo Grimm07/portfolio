@@ -23,11 +23,14 @@ export interface IngestDeps {
   now: () => number;
 }
 
-interface FunctionUrlEvent {
+// AWS API Gateway HTTP API (payload format 2.0). Response uses the simple
+// { statusCode, headers, body } form, which v2 proxy integrations accept as-is.
+interface ApiGatewayV2Event {
   headers: Record<string, string | undefined>;
   body?: string;
+  isBase64Encoded?: boolean;
 }
-interface FunctionUrlResult {
+interface ApiGatewayV2Result {
   statusCode: number;
   headers: Record<string, string>;
   body: string;
@@ -42,11 +45,11 @@ function originVerified(headerValue: string | undefined, expected: string): bool
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function json(statusCode: number, payload: unknown): FunctionUrlResult {
+function json(statusCode: number, payload: unknown): ApiGatewayV2Result {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
 }
 
-export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): Promise<FunctionUrlResult> {
+export async function handleIngest(event: ApiGatewayV2Event, deps: IngestDeps): Promise<ApiGatewayV2Result> {
   const { env, clients, now } = deps;
 
   // Reject anything that didn't come through CloudFront (and thus skipped WAF).
@@ -59,7 +62,10 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(event.body ?? '');
+    const rawBody = event.isBase64Encoded && event.body
+      ? Buffer.from(event.body, 'base64').toString('utf8')
+      : (event.body ?? '');
+    parsed = JSON.parse(rawBody);
   } catch {
     return json(400, { error: 'Invalid request' });
   }
@@ -106,5 +112,5 @@ const env: IngestEnv = {
 };
 const clients = { ses: new SES({}), secrets: new SM({}) };
 
-export const handler = (event: FunctionUrlEvent): Promise<FunctionUrlResult> =>
+export const handler = (event: ApiGatewayV2Event): Promise<ApiGatewayV2Result> =>
   handleIngest(event, { env, clients, now: () => Date.now() });
