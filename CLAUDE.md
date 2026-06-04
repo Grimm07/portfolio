@@ -5,18 +5,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Project Overview
 
 Personal portfolio website for Trystan Bates-Maricle (AI/ML Engineer). Three-tier architecture:
-- **Frontend**: React 18 + TypeScript + Tailwind CSS, built with Vite, deployed to Cloudflare Pages
-- **Backend**: Cloudflare Worker handling contact form with multi-layer spam protection
-- **Infrastructure**: Terraform managing Cloudflare resources (Pages, Workers, DNS, secrets)
+- **Frontend**: React 18 + TypeScript + Tailwind CSS, built with Vite
+- **Backend**: AWS Lambda (`portfolio-contact-ingest`) handling the contact form, emailing via Amazon SES
+- **Infrastructure**: OpenTofu (`terraform/`) managing AWS resources (Lambda, IAM, SES, Secrets Manager, SSM)
 
 Live at: https://trystan-tbm.dev
+
+> **Migration status (in progress — branch `aws-deploy`).** The contact backend and infrastructure
+> have moved from Cloudflare to the **shadowspire AWS landing zone** (us-east-1). The **frontend
+> hosting cutover is still underway**: the site is currently served by Cloudflare Pages, with
+> S3 + CloudFront (infra-owned, OAC) as the target. The legacy `worker/` directory and the
+> `worker:*` / `dev:all` npm scripts are vestigial and slated for deletion in the retire phase.
+> Full sequencing, pending external gates, and the end-state architecture live in
+> `docs/superpowers/plans/2026-06-03-aws-cutover-reconciliation.md`. Prefer that plan as the
+> source of truth when it disagrees with anything below.
 
 ## Development Commands
 
 ```bash
 # Frontend development
 npm run dev              # Start Vite dev server (http://localhost:5173)
-npm run dev:all          # Start both Vite and Worker dev servers in parallel
 npm run build            # Build for production (tsc + vite build)
 npm run preview          # Preview production build locally
 npm run lint             # ESLint check
@@ -24,22 +32,21 @@ npm run lint             # ESLint check
 # Type checking
 npx tsc --noEmit         # Type check without emitting files
 
-# Worker development (from project root)
-npm run worker:dev       # Start Worker dev server at localhost:8787
-npm run worker:deploy    # Deploy Worker to Cloudflare
+# Contact backend Lambda (from backend/ directory)
+cd backend
+npm test                 # Run the Vitest suite (handler, email, validation, ip, secrets)
+npm run typecheck        # Type check Lambda code (tsc --noEmit)
+npm run build            # Bundle the ingest handler via esbuild -> dist/ingest/index.mjs
 
-# Worker development (from worker/ directory)
-cd worker
-npm run dev              # Start local Worker dev server
-npm run deploy           # Deploy to Cloudflare
-npm run typecheck        # Type check Worker code
-
-# Infrastructure (from terraform/ directory)
+# Infrastructure (from terraform/ directory) — OpenTofu, AWS-only, per-env state
 cd terraform
-terraform init           # Initialize Terraform
-terraform plan           # Preview infrastructure changes
-terraform apply          # Apply infrastructure changes
+tofu init -reconfigure -backend-config=backend-dev.hcl   # dev (or backend-prod.hcl)
+tofu validate
+tofu apply -var environment=dev                          # apply to the selected env
 ```
+
+> **OpenTofu binary**: `tofu` is a user-local install (`~/.local/bin`), not on the system PATH.
+> Run `export PATH="$HOME/.local/bin:$PATH"` first.
 
 ## Architecture
 
@@ -48,25 +55,39 @@ terraform apply          # Apply infrastructure changes
 - **Components**: Functional components with named exports, props interfaces required
 - **Styling**: Tailwind-first with custom theme colors in `tailwind.config.js`
 - **Theme**: Dark mode default, class-based toggle (`darkMode: 'class'`)
+- **Contact form** (`components/Contact.tsx`): same-origin `POST /api/contact`, with AWS WAF CAPTCHA
+  via the WAF integration script (`VITE_WAF_INTEGRATION_URL`). The edge WAF rule validates the token.
 
-### Worker (`worker/src/index.ts`)
-Contact form handler with 5 security layers:
-1. Rate limiting (3 submissions/hour per IP, in-memory Map)
-2. Honeypot field (hidden `website` input)
-3. Time validation (reject submissions < 3 seconds)
-4. Turnstile CAPTCHA verification
-5. Server-side email validation
+### Contact backend (`backend/src/`)
+A single `portfolio-contact-ingest` Lambda behind an `AWS_IAM` Function URL fronted by CloudFront (OAC).
+- `ingest/handler.ts`: parse → honeypot (`website`) → time-trap (reject too-fast) → field validation → SES send.
+- `ingest/email.ts`: sends one Amazon SES email per submission (`Reply-To` = submitter).
+- `ingest/ip.ts`: extracts client IP for the email body.
+- `shared/secrets.ts`: reads the recipient address from Secrets Manager (never hardcoded).
+- `shared/validation.ts`, `shared/types.ts`: shared validation + the `ContactSubmission` shape.
 
-Sends emails via MailChannels API. CORS restricted to `trystan-tbm.dev`.
+**CAPTCHA + rate-limiting are enforced by AWS WAF at the edge**, before the request reaches the
+Lambda — there is no token check or per-IP counter in the handler.
 
 ### Infrastructure (`terraform/`)
-Manages: Pages project, Worker script, Worker routes (`/api/*`), DNS records, secret bindings.
+OpenTofu, AWS-only. Manages: the ingest Lambda + IAM role (SES send + secret read), the `AWS_IAM`
+Function URL, SES domain/DKIM, the contact-email secret, and the SSM handshake. State is a **per-env
+S3 backend** (each env's own account-scoped `shadowspire-<env>-state-*` bucket + `shadowspire-<env>-tf-lock`
+DynamoDB lock) selected via partial `-backend-config=backend-<env>.hcl`.
 
-**IMPORTANT**: Build Worker before applying Terraform:
+- Publishes `/portfolio/<env>/ingest-function-url` to SSM for the infra repo.
+- `permissions.tf` grants CloudFront OAC permission to invoke the Function URL (reads the dist ARN from SSM).
+- The `cloudflare` provider is retained **only** for the SES DKIM CNAME records in `ses.tf`.
+
+**IMPORTANT**: Build the Lambda bundle before applying Terraform (the archive references `backend/dist`):
 ```bash
-cd worker && npm run build  # Creates worker/dist/index.js
-cd ../terraform && terraform apply
+cd backend && npm run build      # Creates backend/dist/ingest/index.mjs
+cd ../terraform && tofu apply -var environment=dev
 ```
+
+### Deployment
+GitHub Actions with OIDC (no long-lived AWS keys). `deploy.yml` builds the Lambda bundle and runs
+`tofu apply` (per-env backend-config) **before** syncing the site, in both the dev and prod jobs.
 
 ## Code Style
 
@@ -90,9 +111,10 @@ bg-primary: #0a0a0a, bg-secondary: #141414, bg-tertiary: #1f1f1f
 
 **Contact is form-only** - LinkedIn link is safe (has its own spam protection).
 
-All secrets must be environment variables:
-- Frontend: `VITE_TURNSTILE_SITE_KEY` (via `.env` or Terraform)
-- Worker: `TURNSTILE_SECRET_KEY`, `CONTACT_EMAIL` (via `.dev.vars` locally, Terraform for production)
+Secrets are never hardcoded:
+- Frontend: `VITE_WAF_INTEGRATION_URL` (via `.env` at build time; `VITE_*` vars are embedded statically)
+- Lambda: `FROM_EMAIL` + `CONTACT_EMAIL_SECRET_ARN` env vars; the recipient address lives in
+  **AWS Secrets Manager**, read at runtime.
 
 ### Pre-commit Hooks (Lefthook)
 Runs automatically on commit:
@@ -105,23 +127,16 @@ Runs automatically on commit:
 
 **Frontend** (`.env`):
 ```bash
-VITE_TURNSTILE_SITE_KEY=your-site-key
+VITE_WAF_INTEGRATION_URL=https://<waf-integration-host>/...
 ```
 
-**Worker** (`worker/.dev.vars`):
-```bash
-TURNSTILE_SECRET_KEY=your-secret-key
-CONTACT_EMAIL=test@example.com
-```
-
-**Terraform** (`terraform/terraform.tfvars`):
+**Terraform** (`terraform/terraform.tfvars`, gitignored):
 ```hcl
-cloudflare_api_token  = "..."
-cloudflare_account_id = "..."
-cloudflare_zone_id    = "..."
-turnstile_site_key    = "..."
-turnstile_secret_key  = "..."
-contact_email         = "..."
+environment          = "dev"          # "dev" or "prod" — drives SSM paths + per-env resources
+contact_email        = "..."          # recipient, stored in Secrets Manager
+cloudflare_api_token = "..."          # ONLY for the SES DKIM CNAMEs (DNS stays in the CF zone)
+cloudflare_zone_id   = "..."
+# domain_name defaults to trystan-tbm.dev
 ```
 
 ## Key Files
@@ -129,10 +144,14 @@ contact_email         = "..."
 | Path | Purpose |
 |------|---------|
 | `src/App.tsx` | Main layout, component composition |
-| `src/components/Contact.tsx` | Contact form with Turnstile integration |
-| `worker/src/index.ts` | Worker handler with all security layers |
-| `worker/wrangler.toml` | Worker configuration |
-| `terraform/main.tf` | All Cloudflare infrastructure |
+| `src/components/Contact.tsx` | Contact form with AWS WAF CAPTCHA integration |
+| `backend/src/ingest/handler.ts` | Ingest Lambda: honeypot, time-trap, validation, SES send |
+| `backend/src/ingest/email.ts` | Single-submission SES email sender |
+| `terraform/lambda.tf` | Ingest Lambda + `AWS_IAM` Function URL |
+| `terraform/iam.tf` | Ingest role (SES send + secret read) |
+| `terraform/ses.tf` | SES domain identity + DKIM (Cloudflare-managed CNAMEs) |
+| `terraform/ssm.tf` / `permissions.tf` | SSM handshake + CloudFront OAC invoke grant |
+| `terraform/backend-{dev,prod}.hcl` | Per-env S3 state backend config |
 | `tailwind.config.js` | Theme colors and fonts |
 | `vite.config.ts` | Build configuration with chunk splitting |
 | `lefthook.yml` | Pre-commit hooks configuration |

@@ -70,19 +70,25 @@ jobs:
           tofu init -reconfigure -backend-config=backend-dev.hcl
           tofu apply -auto-approve -var "environment=dev" -var "contact_email=${{ secrets.CONTACT_EMAIL }}" -var "cloudflare_api_token=${{ secrets.CLOUDFLARE_API_TOKEN }}" -var "cloudflare_zone_id=${{ secrets.CLOUDFLARE_ZONE_ID }}"
 
-      - name: Read WAF CAPTCHA integration URL from SSM
+      - name: Read WAF CAPTCHA integration URL + API key from SSM
         id: waf
         run: |
           URL=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-integration-url" \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
-          if [ -z "$URL" ]; then
-            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url not in SSM yet — deploying without CAPTCHA wired"
+          KEY=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-api-key" --with-decryption \
+                  --query Parameter.Value --output text 2>/dev/null || echo "")
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
           fi
+          # The API key is a client-side value, but keep it out of plaintext logs.
+          echo "::add-mask::$KEY"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
 
       - name: Build site
         env:
           VITE_WAF_INTEGRATION_URL: ${{ steps.waf.outputs.url }}
+          VITE_WAF_API_KEY: ${{ steps.waf.outputs.key }}
         run: npm run build
 
       - name: Sync to S3 + invalidate CloudFront
@@ -136,19 +142,25 @@ jobs:
           tofu init -reconfigure -backend-config=backend-prod.hcl
           tofu apply -auto-approve -var "environment=prod" -var "contact_email=${{ secrets.CONTACT_EMAIL }}" -var "cloudflare_api_token=${{ secrets.CLOUDFLARE_API_TOKEN }}" -var "cloudflare_zone_id=${{ secrets.CLOUDFLARE_ZONE_ID }}"
 
-      - name: Read WAF CAPTCHA integration URL from SSM
+      - name: Read WAF CAPTCHA integration URL + API key from SSM
         id: waf
         run: |
           URL=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-integration-url" \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
-          if [ -z "$URL" ]; then
-            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url not in SSM yet — deploying without CAPTCHA wired"
+          KEY=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-api-key" --with-decryption \
+                  --query Parameter.Value --output text 2>/dev/null || echo "")
+          if [ -z "$URL" ] || [ -z "$KEY" ]; then
+            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
           fi
+          # The API key is a client-side value, but keep it out of plaintext logs.
+          echo "::add-mask::$KEY"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
 
       - name: Build site
         env:
           VITE_WAF_INTEGRATION_URL: ${{ steps.waf.outputs.url }}
+          VITE_WAF_API_KEY: ${{ steps.waf.outputs.key }}
         run: npm run build
 
       - name: Sync to S3 + invalidate CloudFront

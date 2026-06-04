@@ -13,3 +13,8 @@ output "ingest_function_url_ssm_param" {
   description = "SSM parameter name where the ingest Function URL is published for the infra repo"
   value       = aws_ssm_parameter.ingest_function_url.name
 }
+
+output "ingest_function_arn_ssm_param" {
+  description = "SSM parameter name where the ingest Lambda ARN is published for the infra repo"
+  value       = aws_ssm_parameter.ingest_function_arn.name
+}

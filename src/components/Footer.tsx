@@ -61,6 +61,36 @@ export function Footer() {
         >
           View Source on GitHub →
         </a>
+
+        {/* Official "Powered by AWS" co-marketing badge (aws.amazon.com/co-marketing).
+            White variant on dark surfaces, standard variant on light surfaces.
+            Wrapped in a block element so it sits on its own line below the source link. */}
+        <div className="mt-6">
+        <a
+          href="https://aws.amazon.com/what-is-cloud-computing/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-block opacity-80 hover:opacity-100 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
+          aria-label="Powered by AWS Cloud Computing (opens in new tab)"
+        >
+          <img
+            src="/powered-by-aws-white.png"
+            alt="Powered by AWS Cloud Computing"
+            width={100}
+            height={36}
+            loading="lazy"
+            className="hidden dark:inline-block h-9 w-auto"
+          />
+          <img
+            src="/powered-by-aws.png"
+            alt="Powered by AWS Cloud Computing"
+            width={100}
+            height={36}
+            loading="lazy"
+            className="inline-block dark:hidden h-9 w-auto"
+          />
+        </a>
+        </div>
       </div>
     </footer>
   );
