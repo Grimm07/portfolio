@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
 import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
 import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
@@ -134,5 +134,23 @@ describe('handleIngest', () => {
     const res = await handleIngest(event(), deps());
     expect(res.statusCode).toBe(500);
     expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
+  });
+
+  it('logs a non-sensitive label (not the raw error) when the send path throws', async () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // A realistic SES rejection whose message embeds the recipient address (PII).
+    const boom = Object.assign(new Error('Email address is not verified: pibot.zeus@gmail.com'), {
+      name: 'MessageRejected',
+    });
+    ses.on(SendEmailCommand).rejects(boom);
+    const res = await handleIngest(event(), deps());
+    expect(res.statusCode).toBe(500);
+    // Logs the fixed label...
+    expect(spy).toHaveBeenCalledWith('contact ingest: failed to send message', 'MessageRejected');
+    // ...and never the raw message / address.
+    const logged = spy.mock.calls.flat().join(' ');
+    expect(logged).not.toContain('pibot.zeus@gmail.com');
+    expect(logged).not.toContain('not verified');
+    spy.mockRestore();
   });
 });

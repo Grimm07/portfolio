@@ -49,6 +49,20 @@ function json(statusCode: number, payload: unknown): ApiGatewayV2Result {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
 }
 
+// Maps a caught error to a NON-sensitive, fixed-literal label for logging. Never returns the
+// error message or object — those can embed env-sourced data (the secret ARN, the recipient
+// address, the origin-verify secret). Each branch returns a constant, so nothing tainted is
+// logged, while the common failure modes stay distinguishable in CloudWatch.
+function errorLabel(err: unknown): string {
+  switch (err instanceof Error ? err.name : '') {
+    case 'MessageRejected':           return 'MessageRejected';           // SES: recipient unverified / sandbox
+    case 'AccessDeniedException':     return 'AccessDeniedException';     // IAM: SES or Secrets denied
+    case 'ResourceNotFoundException': return 'ResourceNotFoundException'; // secret / identity missing
+    case 'ThrottlingException':       return 'ThrottlingException';
+    default:                          return 'other';
+  }
+}
+
 export async function handleIngest(event: ApiGatewayV2Event, deps: IngestDeps): Promise<ApiGatewayV2Result> {
   const { env, clients, now } = deps;
 
@@ -97,7 +111,10 @@ export async function handleIngest(event: ApiGatewayV2Event, deps: IngestDeps): 
   try {
     const to = await getSecret(clients.secrets, env.CONTACT_EMAIL_SECRET_ARN);
     await sendContactEmail(clients.ses, { from: env.FROM_EMAIL, to, replyTo: email, name, email, message, ip, createdAt });
-  } catch {
+  } catch (err) {
+    // Log only a fixed, non-sensitive label (never the error message/object, which can carry
+    // env-sourced data) — enough to tell e.g. an unverified-recipient MessageRejected apart.
+    console.error('contact ingest: failed to send message', errorLabel(err));
     return json(500, { error: 'Failed to send message' });
   }
 
