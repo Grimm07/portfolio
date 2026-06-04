@@ -13,20 +13,16 @@ const TEST_EMAIL = ['john', 'example.com'].join('@');
 describe('Contact', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // WAF CAPTCHA integration: the build embeds the integration URL; the SDK script
-    // (mocked below) defines window.AwsWafIntegration.getToken().
+    // WAF CAPTCHA integration: the build embeds the integration URL + API key; the SDK
+    // (mocked below) defines window.AwsWafCaptcha.renderCaptcha(). Our mock immediately
+    // calls onSuccess to simulate the user solving the inline puzzle.
     import.meta.env.VITE_WAF_INTEGRATION_URL = 'https://waf.test/integration/jsapi.js';
-    window.AwsWafIntegration = {
-      getToken: vi.fn(async () => 'mock-waf-token'),
-      fetch: vi.fn(),
+    import.meta.env.VITE_WAF_API_KEY = 'mock-api-key';
+    window.AwsWafCaptcha = {
+      renderCaptcha: vi.fn((_container, opts) => {
+        opts.onSuccess('mock-waf-token');
+      }),
     };
-    // Pretend the integration script already loaded so the component's effect marks
-    // wafReady = true (it short-circuits when it finds an existing script[data-aws-waf]).
-    if (!document.querySelector('script[data-aws-waf]')) {
-      const s = document.createElement('script');
-      s.dataset.awsWaf = 'true';
-      document.head.appendChild(s);
-    }
   });
 
   it('renders the contact section', () => {
@@ -93,7 +89,17 @@ describe('Contact', () => {
     });
   });
 
-  it('enables submit button when form is valid and WAF SDK is ready', async () => {
+  it('renders the inline CAPTCHA widget with the API key', async () => {
+    render(<Contact />);
+    await waitFor(() => {
+      expect(window.AwsWafCaptcha!.renderCaptcha).toHaveBeenCalledWith(
+        expect.any(HTMLElement),
+        expect.objectContaining({ apiKey: 'mock-api-key' })
+      );
+    });
+  });
+
+  it('enables submit button when form is valid and the CAPTCHA is solved', async () => {
     const user = userEvent.setup();
     render(<Contact />);
 
@@ -108,7 +114,7 @@ describe('Contact', () => {
     }, { timeout: 3000 });
   });
 
-  it('submits form successfully with a WAF token header', async () => {
+  it('submits form successfully via same-origin POST after solving the CAPTCHA', async () => {
     const user = userEvent.setup();
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
       ok: true,
@@ -133,14 +139,15 @@ describe('Contact', () => {
       expect(screen.getByRole('alert')).toHaveTextContent(/message sent successfully!/i);
     });
 
-    expect(window.AwsWafIntegration!.getToken).toHaveBeenCalled();
-    expect(globalThis.fetch).toHaveBeenCalledWith('/api/contact', expect.objectContaining({
-      method: 'POST',
-      headers: expect.objectContaining({
-        'Content-Type': 'application/json',
-        'x-aws-waf-token': 'mock-waf-token',
-      }),
-    }));
+    expect(window.AwsWafCaptcha!.renderCaptcha).toHaveBeenCalled();
+    // Same-origin POST to /api/contact; the aws-waf-token cookie (not a header) carries the token.
+    const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(url).toBe('/api/contact');
+    expect(init.method).toBe('POST');
+    expect(init.headers['x-aws-waf-token']).toBeUndefined();
+    const body = JSON.parse(init.body);
+    expect(body).toMatchObject({ name: 'John Doe', email: TEST_EMAIL });
+    expect(typeof body.formTimestamp).toBe('number');
   });
 
   it('handles form submission error', async () => {

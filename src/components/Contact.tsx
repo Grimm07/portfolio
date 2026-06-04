@@ -1,11 +1,20 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 // The AWS WAF CAPTCHA integration script (jsapi.js) defines this global at runtime.
+// We use the explicit CAPTCHA JS API (renderCaptcha) because the edge WAF rule on
+// POST /api/* uses a CAPTCHA *action* (a visible puzzle), not a silent Challenge.
 declare global {
   interface Window {
-    AwsWafIntegration?: {
-      getToken: () => Promise<string>;
-      fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    AwsWafCaptcha?: {
+      renderCaptcha: (
+        container: HTMLElement,
+        options: {
+          apiKey: string;
+          onSuccess: (token: string) => void;
+          onError?: (error: unknown) => void;
+          onLoad?: () => void;
+        }
+      ) => void;
     };
   }
 }
@@ -66,29 +75,61 @@ export function Contact() {
     message: '',
   });
   const wafIntegrationUrl = import.meta.env.VITE_WAF_INTEGRATION_URL as string | undefined;
-  // Ready if the integration script is already present at first render (also the test seam).
-  const [wafReady, setWafReady] = useState(
-    () => typeof document !== 'undefined' && !!document.querySelector('script[data-aws-waf]')
+  const wafApiKey = import.meta.env.VITE_WAF_API_KEY as string | undefined;
+  const wafConfigured = !!wafIntegrationUrl && !!wafApiKey;
+
+  // Container the CAPTCHA widget is rendered into, plus a guard so renderCaptcha runs once.
+  const captchaRef = useRef<HTMLDivElement>(null);
+  const captchaRenderedRef = useRef(false);
+  // Token from a solved CAPTCHA. The SDK also sets the `aws-waf-token` cookie automatically;
+  // on a same-origin POST that cookie is what the edge WAF reads. We track the token only to
+  // gate the submit button (a solved puzzle => allow submit).
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null);
+  // Ready once the integration SDK (window.AwsWafCaptcha) is available.
+  const [sdkReady, setSdkReady] = useState(
+    () => typeof window !== 'undefined' && !!window.AwsWafCaptcha
   );
 
-  // Load the AWS WAF CAPTCHA integration script (defines window.AwsWafIntegration).
-  // The edge WAF rule on POST /api/* validates the token getToken() returns.
+  // Load the AWS WAF CAPTCHA integration script (defines window.AwsWafCaptcha).
+  // If the SDK is already present at first render, sdkReady is seeded true above.
   useEffect(() => {
-    if (!wafIntegrationUrl) return;
-    // Already injected (StrictMode / re-mount / SSR hydration) — wafReady was seeded true.
-    if (document.querySelector('script[data-aws-waf]')) return;
+    if (!wafConfigured || sdkReady || window.AwsWafCaptcha) return;
+    // Reuse an already-injected script (StrictMode / re-mount / SSR hydration).
+    const existing = document.querySelector<HTMLScriptElement>('script[data-aws-waf]');
+    if (existing) {
+      existing.addEventListener('load', () => setSdkReady(true), { once: true });
+      return;
+    }
     const script = document.createElement('script');
-    script.src = wafIntegrationUrl;
+    script.src = wafIntegrationUrl!;
     script.defer = true;
     script.dataset.awsWaf = 'true';
-    script.onload = () => setWafReady(true);
+    script.onload = () => setSdkReady(true);
     script.onerror = () =>
       setSubmissionState({
         status: 'error',
         message: 'Security check failed to load. Please reload the page.',
       });
     document.head.appendChild(script);
-  }, [wafIntegrationUrl]);
+  }, [wafConfigured, wafIntegrationUrl, sdkReady]);
+
+  // Render the inline CAPTCHA widget once the SDK is ready. onSuccess fires when the user
+  // solves the puzzle; the SDK sets the aws-waf-token cookie and we enable the submit button.
+  useEffect(() => {
+    if (!sdkReady || !wafApiKey) return;
+    const container = captchaRef.current;
+    if (!container || captchaRenderedRef.current || !window.AwsWafCaptcha) return;
+    captchaRenderedRef.current = true;
+    window.AwsWafCaptcha.renderCaptcha(container, {
+      apiKey: wafApiKey,
+      onSuccess: (token) => setCaptchaToken(token),
+      onError: () =>
+        setSubmissionState({
+          status: 'error',
+          message: 'Security check failed to load. Please reload the page.',
+        }),
+    });
+  }, [sdkReady, wafApiKey]);
 
   // Reset form after successful submission
   useEffect(() => {
@@ -171,7 +212,10 @@ export function Contact() {
     validateEmail(formData.email) &&
     formData.message.trim().length >= 10;
 
-  const canSubmit = isFormValid && wafReady && submissionState.status !== 'loading';
+  // When WAF is configured, the user must solve the CAPTCHA first. With no WAF configured
+  // (e.g. local dev), allow submit outside production; in production a missing config blocks it.
+  const captchaSatisfied = wafConfigured ? !!captchaToken : !import.meta.env.PROD;
+  const canSubmit = isFormValid && captchaSatisfied && submissionState.status !== 'loading';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -188,23 +232,20 @@ export function Contact() {
     setSubmissionState({ status: 'loading', message: '' });
 
     try {
-      // Obtain a fresh WAF token; the edge WAF rule on POST /api/* validates it.
-      const wafToken =
-        typeof window !== 'undefined' && window.AwsWafIntegration
-          ? await window.AwsWafIntegration.getToken()
-          : '';
+      // Same-origin POST: the aws-waf-token cookie set by the solved CAPTCHA is sent
+      // automatically and validated by the edge WAF before CloudFront forwards to the Lambda.
+      // The body field name is `formTimestamp` to match the Lambda's time-trap check.
       const response = await fetch('/api/contact', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-aws-waf-token': wafToken,
         },
         body: JSON.stringify({
           name: formData.name,
           email: formData.email,
           message: formData.message,
-          timestamp: formTimestamp,
-          website: formData.website || undefined,
+          formTimestamp,
+          website: formData.website,
         }),
       });
 
@@ -383,9 +424,19 @@ export function Contact() {
               autoComplete="off"
             />
 
-            {/* AWS WAF CAPTCHA — token acquired at submit time via the integration SDK;
-                the edge presents a challenge overlay only when WAF decides one is needed. */}
-            {!wafIntegrationUrl && import.meta.env.PROD ? (
+            {/* AWS WAF CAPTCHA — the inline widget (rendered via AwsWafCaptcha.renderCaptcha)
+                must be solved before submit is enabled. Solving it sets the same-origin
+                aws-waf-token cookie that the edge WAF validates on POST /api/contact. */}
+            {wafConfigured ? (
+              <div>
+                <div ref={captchaRef} className="flex justify-center" aria-label="Security check" />
+                {!captchaToken && (
+                  <p className="mt-2 text-sm text-text-secondary text-center">
+                    Please complete the security check to enable sending.
+                  </p>
+                )}
+              </div>
+            ) : import.meta.env.PROD ? (
               <div className="p-4 bg-yellow-500/10 border border-yellow-500/50 rounded-lg text-center">
                 <p className="text-sm text-yellow-500">Contact form temporarily unavailable. Please reach out via LinkedIn.</p>
               </div>
