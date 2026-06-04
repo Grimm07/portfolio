@@ -8,10 +8,21 @@ import { __clearSecretCache } from '../../src/shared/secrets';
 const ses = mockClient(SESClient);
 const sm = mockClient(SecretsManagerClient);
 
+const ORIGIN_SECRET = 'origin-secret-value';
+
 const ENV = {
   FROM_EMAIL: 'noreply@trystan-tbm.dev',
   CONTACT_EMAIL_SECRET_ARN: 'arn:aws:secretsmanager:us-east-1:111:secret:contact-email',
+  ORIGIN_VERIFY_SECRET: ORIGIN_SECRET,
 };
+
+// Headers a real CloudFront→API-Gateway request carries, including the origin-verify secret.
+const baseHeaders = (extra: Record<string, string> = {}) => ({
+  'x-forwarded-for': '1.2.3.4',
+  'user-agent': 'UA',
+  'x-origin-verify': ORIGIN_SECRET,
+  ...extra,
+});
 
 // A valid submission: honeypot empty, old-enough timestamp. No turnstileToken (WAF handles CAPTCHA).
 function event(overrides: Record<string, unknown> = {}) {
@@ -19,7 +30,7 @@ function event(overrides: Record<string, unknown> = {}) {
     name: 'Alice', email: 'a@b.co', message: 'hello there',
     website: '', formTimestamp: 0, ...overrides,
   });
-  return { headers: { 'x-forwarded-for': '1.2.3.4', 'user-agent': 'UA' }, body } as never;
+  return { headers: baseHeaders(), body } as never;
 }
 
 const deps = () => ({
@@ -66,13 +77,13 @@ describe('handleIngest', () => {
   });
 
   it('returns 400 on malformed JSON', async () => {
-    const bad = { headers: {}, body: '{not json' } as never;
+    const bad = { headers: baseHeaders(), body: '{not json' } as never;
     const res = await handleIngest(bad, deps());
     expect(res.statusCode).toBe(400);
   });
 
   it('returns 400 when body is JSON null (non-object body)', async () => {
-    const bad = { headers: { 'x-forwarded-for': '1.2.3.4' }, body: 'null' } as never;
+    const bad = { headers: baseHeaders(), body: 'null' } as never;
     const res = await handleIngest(bad, deps());
     expect(res.statusCode).toBe(400);
     expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
@@ -86,6 +97,20 @@ describe('handleIngest', () => {
   it('returns 400 when name is a number (non-string name)', async () => {
     const res = await handleIngest(event({ name: 123 }), deps());
     expect(res.statusCode).toBe(400);
+  });
+
+  it('rejects a request missing x-origin-verify with 403 and sends nothing', async () => {
+    const noHeader = { headers: { 'x-forwarded-for': '1.2.3.4' }, body: event().body } as never;
+    const res = await handleIngest(noHeader, deps());
+    expect(res.statusCode).toBe(403);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
+  });
+
+  it('rejects a wrong x-origin-verify with 403 and sends nothing', async () => {
+    const wrong = { headers: baseHeaders({ 'x-origin-verify': 'nope' }), body: event().body } as never;
+    const res = await handleIngest(wrong, deps());
+    expect(res.statusCode).toBe(403);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 
   it('returns 500 when SES send fails', async () => {
