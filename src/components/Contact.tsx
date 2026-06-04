@@ -1,5 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
-import { Turnstile, type TurnstileInstance } from '@marsidev/react-turnstile';
+import { useState, useEffect } from 'react';
+
+// The AWS WAF CAPTCHA integration script (jsapi.js) defines this global at runtime.
+declare global {
+  interface Window {
+    AwsWafIntegration?: {
+      getToken: () => Promise<string>;
+      fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    };
+  }
+}
 
 interface FormData {
   name: string;
@@ -31,16 +40,6 @@ function validateEmail(email: string): boolean {
   return regex.test(email);
 }
 
-/**
- * Get current theme from document class
- */
-function getCurrentTheme(): 'light' | 'dark' {
-  if (typeof document !== 'undefined') {
-    return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-  }
-  return 'dark'; // Default to dark
-}
-
 export function Contact() {
   const [formData, setFormData] = useState<FormData>({
     name: '',
@@ -61,28 +60,35 @@ export function Contact() {
     message: false,
   });
 
-  const [turnstileToken, setTurnstileToken] = useState<string>('');
   const [formTimestamp, setFormTimestamp] = useState<number>(Date.now);
   const [submissionState, setSubmissionState] = useState<SubmissionState>({
     status: 'idle',
     message: '',
   });
-  const [theme, setTheme] = useState<'light' | 'dark'>(getCurrentTheme());
-  const turnstileRef = useRef<TurnstileInstance>(null);
+  const wafIntegrationUrl = import.meta.env.VITE_WAF_INTEGRATION_URL as string | undefined;
+  // Ready if the integration script is already present at first render (also the test seam).
+  const [wafReady, setWafReady] = useState(
+    () => typeof document !== 'undefined' && !!document.querySelector('script[data-aws-waf]')
+  );
 
-  // Watch for theme changes
+  // Load the AWS WAF CAPTCHA integration script (defines window.AwsWafIntegration).
+  // The edge WAF rule on POST /api/* validates the token getToken() returns.
   useEffect(() => {
-    const observer = new MutationObserver(() => {
-      setTheme(getCurrentTheme());
-    });
-
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ['class'],
-    });
-
-    return () => observer.disconnect();
-  }, []);
+    if (!wafIntegrationUrl) return;
+    // Already injected (StrictMode / re-mount / SSR hydration) — wafReady was seeded true.
+    if (document.querySelector('script[data-aws-waf]')) return;
+    const script = document.createElement('script');
+    script.src = wafIntegrationUrl;
+    script.defer = true;
+    script.dataset.awsWaf = 'true';
+    script.onload = () => setWafReady(true);
+    script.onerror = () =>
+      setSubmissionState({
+        status: 'error',
+        message: 'Security check failed to load. Please reload the page.',
+      });
+    document.head.appendChild(script);
+  }, [wafIntegrationUrl]);
 
   // Reset form after successful submission
   useEffect(() => {
@@ -100,12 +106,8 @@ export function Contact() {
           email: false,
           message: false,
         });
-        setTurnstileToken('');
         setFormTimestamp(Date.now());
         setSubmissionState({ status: 'idle', message: '' });
-        if (turnstileRef.current) {
-          turnstileRef.current.reset();
-        }
       }, 3000);
 
       return () => clearTimeout(timer);
@@ -169,7 +171,7 @@ export function Contact() {
     validateEmail(formData.email) &&
     formData.message.trim().length >= 10;
 
-  const canSubmit = isFormValid && turnstileToken && submissionState.status !== 'loading';
+  const canSubmit = isFormValid && wafReady && submissionState.status !== 'loading';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -179,23 +181,28 @@ export function Contact() {
       return;
     }
 
-    if (!isFormValid || !turnstileToken) {
+    if (!isFormValid) {
       return;
     }
 
     setSubmissionState({ status: 'loading', message: '' });
 
     try {
+      // Obtain a fresh WAF token; the edge WAF rule on POST /api/* validates it.
+      const wafToken =
+        typeof window !== 'undefined' && window.AwsWafIntegration
+          ? await window.AwsWafIntegration.getToken()
+          : '';
       const response = await fetch('/api/contact', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-aws-waf-token': wafToken,
         },
         body: JSON.stringify({
           name: formData.name,
           email: formData.email,
           message: formData.message,
-          turnstileToken,
           timestamp: formTimestamp,
           website: formData.website || undefined,
         }),
@@ -218,8 +225,6 @@ export function Contact() {
               status: 'error',
               message: 'Invalid response from server. Please try again.',
             });
-            turnstileRef.current?.reset();
-            setTurnstileToken('');
             return;
           }
         }
@@ -246,12 +251,6 @@ export function Contact() {
           message: errorMessage,
         });
 
-        // Reset Turnstile on error
-        if (turnstileRef.current) {
-          turnstileRef.current.reset();
-        }
-        setTurnstileToken('');
-
         return;
       }
 
@@ -267,14 +266,8 @@ export function Contact() {
         status: 'error',
         message: 'Network error. Please check your connection and try again.',
       });
-
-      // Reset Turnstile on error
-      turnstileRef.current?.reset();
-      setTurnstileToken('');
     }
   };
-
-  const turnstileSiteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY;
 
   return (
     <section id="contact" className="py-20 lg:py-32 bg-bg-secondary relative overflow-hidden">
@@ -390,30 +383,9 @@ export function Contact() {
               autoComplete="off"
             />
 
-            {/* Turnstile CAPTCHA */}
-            {turnstileSiteKey ? (
-              <div className="flex justify-center">
-                <Turnstile
-                  siteKey={turnstileSiteKey}
-                  onSuccess={(token) => setTurnstileToken(token)}
-                  onError={() => {
-                    setTurnstileToken('');
-                    setSubmissionState({
-                      status: 'error',
-                      message: 'CAPTCHA verification failed. Please try again.',
-                    });
-                  }}
-                  onExpire={() => {
-                    setTurnstileToken('');
-                  }}
-                  options={{
-                    theme: theme,
-                    size: 'normal',
-                  }}
-                  ref={turnstileRef}
-                />
-              </div>
-            ) : import.meta.env.PROD ? (
+            {/* AWS WAF CAPTCHA — token acquired at submit time via the integration SDK;
+                the edge presents a challenge overlay only when WAF decides one is needed. */}
+            {!wafIntegrationUrl && import.meta.env.PROD ? (
               <div className="p-4 bg-yellow-500/10 border border-yellow-500/50 rounded-lg text-center">
                 <p className="text-sm text-yellow-500">Contact form temporarily unavailable. Please reach out via LinkedIn.</p>
               </div>
