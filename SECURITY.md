@@ -78,12 +78,12 @@ The contact backend is a single AWS Lambda (`portfolio-contact-ingest`) exposed 
 
 ### 5. Secrets via Infrastructure as Code (Not in Git)
 
-**Infrastructure as Code:** OpenTofu (`terraform/`) manages all AWS resources.
-
-- `terraform/terraform.tfvars` holds sensitive values and is in `.gitignore`. It contains:
-  - `contact_email` — the recipient address loaded into Secrets Manager
-  - `cloudflare_api_token` / `cloudflare_zone_id` — used **only** to manage the SES DKIM CNAME records, because DNS for the domain is still hosted in the Cloudflare zone. These do not touch the application path.
-- Terraform state lives in a **per-env S3 backend** (account-scoped `shadowspire-<env>-state-*` bucket with a DynamoDB lock), **not** in git. `.tfstate` files are excluded from version control.
+**Infrastructure as Code:** the backend OpenTofu — and the secrets it handles (`terraform.tfvars`,
+the contact-email secret in Secrets Manager, the per-env S3 state) — now live in the
+**[`portfolio-backend`](https://github.com/Grimm07/portfolio-backend)** repo, which documents its own
+secret handling. This repo (the frontend) commits no secrets: only build-time `VITE_*` values via
+`.env` (gitignored), which are themselves client-side, non-sensitive values published by the infra
+repo to SSM.
 
 **Benefits:**
 - Secrets never enter version control
@@ -125,8 +125,8 @@ Before deploying to production, verify the following:
 - [ ] No phone numbers in any format (plain text, `tel:`, obfuscated)
 - [ ] No hardcoded API keys, tokens, or secrets
 - [ ] All `.env` files excluded from git (verify `.gitignore`)
-- [ ] `terraform/terraform.tfvars` excluded from git (verify `.gitignore`)
-- [ ] No `.tfstate` files committed (state lives in the S3 backend)
+- [ ] Backend IaC/secret checks (`terraform.tfvars`, `.tfstate`) are covered in the
+      `portfolio-backend` repo's security policy
 
 ### Infrastructure Security
 - [ ] Contact Lambda Function URL is `AWS_IAM`-authenticated and **not** publicly invocable (direct calls return 403)

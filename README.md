@@ -17,7 +17,7 @@ Personal portfolio website for **Trystan Bates-Maricle** - AI/ML Engineer | Full
 - [Features](#features)
 - [Architecture](#architecture)
 - [Local Development](#local-development)
-- [Contact Backend (Lambda)](#contact-backend-lambda)
+- [Contact Backend (separate repo)](#contact-backend-separate-repo)
 - [Deployment](#deployment)
 - [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
@@ -105,23 +105,15 @@ The portfolio is a three-tier, AWS-only application:
   repository; this repo only uploads the build and invalidates the distribution
 - Hosts: prod `trystan-tbm.dev` + `www.trystan-tbm.dev`, dev `dev.trystan-tbm.dev`
 
-### 2. Contact Backend (AWS Lambda)
-- A single `portfolio-contact-ingest` Lambda (TypeScript, bundled with esbuild to ESM)
-- Invoked through an `AWS_IAM`-authenticated Lambda Function URL fronted by CloudFront (OAC)
-- Handler pipeline: parse JSON → honeypot check (`website` field) → time-trap → field validation
-  (email / name / message) → send one email via Amazon SES (`Reply-To` = submitter's email)
+### 2. Contact Backend + Infrastructure (separate repo)
+- The `portfolio-contact-ingest` Lambda and its OpenTofu live in
+  **[`portfolio-backend`](https://github.com/Grimm07/portfolio-backend)** (`../portfolio-backend`),
+  not this repo
+- The contact form posts same-origin to an infra-owned API Gateway that invokes that Lambda; the
+  handler validates (honeypot → time-trap → fields) and sends one Amazon SES email
 - The recipient address is read at runtime from AWS Secrets Manager and is never hardcoded
-
-### 3. Infrastructure (OpenTofu)
-- AWS-only, managed with the `tofu` CLI in `terraform/`
-- Per-env S3 state backend: each environment uses its own account-scoped
-  `shadowspire-<env>-state-*` bucket and `shadowspire-<env>-tf-lock` DynamoDB lock,
-  selected via `-backend-config=backend-<env>.hcl`
-- Manages: the ingest Lambda + IAM role (SES send + secret read only), the `AWS_IAM` Function URL,
-  the SES domain identity + DKIM, the contact-email secret, the SSM handshake, and the
-  CloudFront-OAC invoke permission
-- The `cloudflare` provider is retained for **one reason only**: managing the SES DKIM CNAME records,
-  because DNS is still hosted in the Cloudflare zone. All other Cloudflare resources are gone.
+- The `portfolio-backend` repo owns the SES domain/DKIM, the contact-email secret, the SSM
+  handshake, the API Gateway invoke grant, and the per-env OpenTofu state
 
 **Architecture Diagrams:** View detailed architecture diagrams on the [live site](https://trystan-tbm.dev).
 
@@ -185,34 +177,19 @@ npx tsc --noEmit     # Type check without emitting files
 
 ---
 
-## Contact Backend (Lambda)
+## Contact Backend (separate repo)
 
-The contact form is handled by the `portfolio-contact-ingest` Lambda. Its source lives in `backend/`.
+The contact form is handled by the `portfolio-contact-ingest` Lambda, which — along with its
+OpenTofu infrastructure (IAM, SES/DKIM, the contact-email secret, the SSM handshake, and the API
+Gateway invoke grant) — now lives in its own repo: **[`portfolio-backend`](https://github.com/Grimm07/portfolio-backend)**
+(`../portfolio-backend` locally).
 
-### Working on the Lambda
+This repo (the frontend) only knows the API path it posts to and the WAF integration URL it embeds
+at build time. To work on the handler, validation, SES email, or the Terraform, switch to the
+`portfolio-backend` repo — it has its own commands, tests, runbook, and CI/CD.
 
-```bash
-cd backend
-
-npm test          # Run the Vitest suite (handler, email, validation, ip, secrets)
-npm run typecheck # Type check Lambda code (tsc --noEmit)
-npm run build     # Bundle the ingest handler via esbuild → dist/ingest/index.mjs
-```
-
-### Handler pipeline
-
-1. Parse the JSON body
-2. Honeypot check - silently reject if the hidden `website` field is filled
-3. Time-trap - reject submissions completed faster than the minimum form-fill time
-4. Field validation - email, name, and message
-5. Send one email via Amazon SES, with `Reply-To` set to the submitter's email
-
-The recipient address is read at runtime from AWS Secrets Manager (via `CONTACT_EMAIL_SECRET_ARN`)
-and is never hardcoded. CAPTCHA and rate limiting are enforced by AWS WAF at the CloudFront edge,
-so there is no token check or per-IP counter inside the handler.
-
-> **Important:** Always build the Lambda bundle (`cd backend && npm run build`) before running
-> `tofu apply` — the OpenTofu archive references `backend/dist`.
+> CAPTCHA and rate limiting are enforced by AWS WAF at the CloudFront edge, before any request
+> reaches the Lambda.
 
 ---
 
@@ -222,45 +199,12 @@ Deployment runs through **GitHub Actions with OIDC** — there are no long-lived
 `.github/workflows/deploy.yml` defines a **dev** job and a **prod** job; the GitHub Environments
 `dev` and `production` gate the OIDC subjects.
 
-Each job:
+Each job (frontend only — the Lambda + Terraform deploy is owned by the `portfolio-backend` repo):
 
-1. Builds the Lambda bundle (`cd backend && npm run build`)
-2. Runs `tofu apply` with the per-env backend config (`-backend-config=backend-<env>.hcl`)
-3. Builds the frontend (`npm run build`)
-4. Syncs the static assets to the infra-owned S3 bucket
-5. Invalidates the infra-owned CloudFront distribution
-
-### Infrastructure (OpenTofu)
-
-> **OpenTofu binary:** `tofu` is a user-local install (`~/.local/bin`), not on the system PATH.
-> Run `export PATH="$HOME/.local/bin:$PATH"` first.
-
-See detailed instructions in [`terraform/README.md`](./terraform/README.md).
-
-**Quick Start:**
-```bash
-# 1. Configure variables
-cd terraform
-cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars (see Environment Variables)
-
-# 2. Build the Lambda bundle (the archive references backend/dist)
-cd ../backend && npm run build
-cd ../terraform
-
-# 3. Initialize, validate, and apply (dev shown; use backend-prod.hcl for prod)
-tofu init -reconfigure -backend-config=backend-dev.hcl
-tofu validate
-tofu apply -var environment=dev
-```
-
-**What OpenTofu manages:**
-- The ingest Lambda and its IAM role (SES send + secret read only)
-- The `AWS_IAM` Lambda Function URL
-- SES domain identity + DKIM
-- The contact-email secret in Secrets Manager
-- The SSM handshake and the CloudFront-OAC invoke permission
-- The SES DKIM CNAME records (the only remaining use of the `cloudflare` provider)
+1. Reads the WAF integration URL/key from SSM (`/portfolio/<env>/waf-*`)
+2. Builds the frontend (`npm run build`)
+3. Syncs the static assets to the infra-owned S3 bucket
+4. Invalidates the infra-owned CloudFront distribution
 
 ---
 
@@ -277,26 +221,13 @@ VITE_WAF_INTEGRATION_URL=https://<waf-integration-host>/...
 VITE_WAF_API_KEY=<waf-api-key>
 ```
 
-### Lambda
+### Backend (Lambda + OpenTofu)
 
-Set on the function by OpenTofu:
+The Lambda env vars (`FROM_EMAIL`, `CONTACT_EMAIL_SECRET_ARN`) and the Terraform variables
+(`terraform.tfvars`) are documented in the **[`portfolio-backend`](https://github.com/Grimm07/portfolio-backend)**
+repo. The recipient address lives only in AWS Secrets Manager and is read at runtime.
 
-- `FROM_EMAIL` - the verified SES sender address
-- `CONTACT_EMAIL_SECRET_ARN` - ARN of the Secrets Manager secret holding the recipient address
-
-The recipient address itself lives only in AWS Secrets Manager and is read at runtime.
-
-### OpenTofu (`terraform/terraform.tfvars`, gitignored)
-
-```hcl
-environment          = "dev"   # "dev" or "prod" — drives SSM paths + per-env resources
-contact_email        = "..."   # recipient, stored in Secrets Manager
-cloudflare_api_token = "..."   # ONLY for the SES DKIM CNAMEs (DNS stays in the CF zone)
-cloudflare_zone_id   = "..."
-# domain_name defaults to trystan-tbm.dev
-```
-
-**Security Note:** Never commit `.env` or `terraform.tfvars` to version control.
+**Security Note:** Never commit `.env` to version control.
 
 ---
 
@@ -319,26 +250,6 @@ portfolio/
 │   ├── main.tsx             # React entry point
 │   └── index.css            # Tailwind directives
 │
-├── backend/                 # AWS Lambda contact backend
-│   ├── src/
-│   │   ├── ingest/
-│   │   │   ├── handler.ts   # honeypot, time-trap, validation, SES send
-│   │   │   ├── email.ts     # single-submission SES email sender
-│   │   │   └── ip.ts        # client IP extraction for the email body
-│   │   └── shared/
-│   │       ├── secrets.ts   # reads recipient from Secrets Manager
-│   │       ├── validation.ts# shared field validation
-│   │       └── types.ts     # ContactSubmission shape
-│   ├── test/                # Vitest suite
-│   └── package.json
-│
-├── terraform/               # Infrastructure as Code (OpenTofu)
-│   ├── *.tf                 # Lambda, IAM, SES, SSM, permissions, etc.
-│   ├── backend-dev.hcl      # Per-env S3 state backend config (dev)
-│   ├── backend-prod.hcl     # Per-env S3 state backend config (prod)
-│   ├── terraform.tfvars.example  # Variables template
-│   └── README.md            # Deployment guide
-│
 ├── public/                  # Static assets
 │
 ├── dist/                    # Production build output (gitignored)
@@ -353,6 +264,9 @@ portfolio/
 ├── lefthook.yml             # Pre-commit hooks
 └── README.md                # This file
 ```
+
+> The contact Lambda (`backend/`) and infrastructure (`terraform/`) used to live here; they now
+> live in the sibling **[`portfolio-backend`](https://github.com/Grimm07/portfolio-backend)** repo.
 
 ---
 
