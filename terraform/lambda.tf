@@ -65,3 +65,15 @@ resource "aws_lambda_event_source_mapping" "notifier" {
   maximum_batching_window_in_seconds = 300
   function_response_types            = ["ReportBatchItemFailures"]
 }
+
+# Let CloudFront (this distribution only) invoke the IAM-locked ingest Function URL via OAC.
+# Without this, the OAC-signed origin requests from cloudfront.tf would be denied (403).
+# action is the Function-URL-specific InvokeFunctionUrl; source_arn scopes it to our distribution.
+resource "aws_lambda_permission" "cloudfront_invoke_ingest" {
+  statement_id           = "AllowCloudFrontInvoke"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.ingest.function_name
+  principal              = "cloudfront.amazonaws.com"
+  source_arn             = aws_cloudfront_distribution.site.arn
+  function_url_auth_type = "AWS_IAM"
+}
