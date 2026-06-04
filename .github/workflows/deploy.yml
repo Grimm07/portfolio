@@ -53,6 +53,23 @@ jobs:
           role-to-assume: arn:aws:iam::176355979099:role/portfolio-deploy
           aws-region: us-east-1
 
+      - name: Build contact Lambda bundle
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.1"
+
+      - name: Apply backend Terraform (dev)
+        working-directory: terraform
+        run: |
+          tofu init -reconfigure -backend-config=backend-dev.hcl
+          tofu apply -auto-approve -var "environment=dev" -var "contact_email=${{ secrets.CONTACT_EMAIL }}" -var "cloudflare_api_token=${{ secrets.CLOUDFLARE_API_TOKEN }}" -var "cloudflare_zone_id=${{ secrets.CLOUDFLARE_ZONE_ID }}"
+
       - name: Read WAF CAPTCHA integration URL from SSM
         id: waf
         run: |
@@ -101,6 +118,23 @@ jobs:
         with:
           role-to-assume: arn:aws:iam::681053994223:role/portfolio-deploy
           aws-region: us-east-1
+
+      - name: Build contact Lambda bundle
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.1"
+
+      - name: Apply backend Terraform (prod)
+        working-directory: terraform
+        run: |
+          tofu init -reconfigure -backend-config=backend-prod.hcl
+          tofu apply -auto-approve -var "environment=prod" -var "contact_email=${{ secrets.CONTACT_EMAIL }}" -var "cloudflare_api_token=${{ secrets.CLOUDFLARE_API_TOKEN }}" -var "cloudflare_zone_id=${{ secrets.CLOUDFLARE_ZONE_ID }}"
 
       - name: Read WAF CAPTCHA integration URL from SSM
         id: waf
