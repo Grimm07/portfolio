@@ -232,21 +232,35 @@ export function Contact() {
     setSubmissionState({ status: 'loading', message: '' });
 
     try {
-      // Same-origin POST: the aws-waf-token cookie set by the solved CAPTCHA is sent
-      // automatically and validated by the edge WAF before CloudFront forwards to the Lambda.
-      // The body field name is `formTimestamp` to match the Lambda's time-trap check.
+      // Serialize the body ONCE and reuse the exact same string for both the hash and the
+      // request — any divergence changes the digest and the Lambda will 403.
+      // The field name is `formTimestamp` to match the Lambda's time-trap check.
+      const body = JSON.stringify({
+        name: formData.name,
+        email: formData.email,
+        message: formData.message,
+        formTimestamp,
+        website: formData.website,
+      });
+
+      // CloudFront OAC signs the origin request with SigV4 but sends UNSIGNED-PAYLOAD for the
+      // body; the IAM-auth Lambda Function URL rejects unsigned payloads with 403. Supplying the
+      // real hex SHA-256 of the body lets OAC's signature cover the payload so the POST reaches
+      // the Lambda. (The aws-waf-token cookie set by the solved CAPTCHA is what gets the POST
+      // past the edge WAF first; this header is what gets it past the Function URL's IAM auth.)
+      const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body));
+      const bodyHash = Array.from(new Uint8Array(digest))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      // Same-origin POST so the aws-waf-token cookie is sent automatically.
       const response = await fetch('/api/contact', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'x-amz-content-sha256': bodyHash,
         },
-        body: JSON.stringify({
-          name: formData.name,
-          email: formData.email,
-          message: formData.message,
-          formTimestamp,
-          website: formData.website,
-        }),
+        body,
       });
 
       // Check if response has content before parsing JSON

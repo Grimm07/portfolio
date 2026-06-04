@@ -148,6 +148,14 @@ describe('Contact', () => {
     const body = JSON.parse(init.body);
     expect(body).toMatchObject({ name: 'John Doe', email: TEST_EMAIL });
     expect(typeof body.formTimestamp).toBe('number');
+
+    // CloudFront OAC needs the real body hash; it must match the exact bytes sent (no re-stringify).
+    const expectedDigest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(init.body));
+    const expectedHash = Array.from(new Uint8Array(expectedDigest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    expect(init.headers['x-amz-content-sha256']).toBe(expectedHash);
+    expect(init.headers['x-amz-content-sha256']).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it('handles form submission error', async () => {
