@@ -4,21 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Personal portfolio website for Trystan Bates-Maricle (AI/ML Engineer). Three-tier architecture:
-- **Frontend**: React 18 + TypeScript + Tailwind CSS, built with Vite
+Personal portfolio website for Trystan Bates-Maricle (AI/ML Engineer). Three-tier architecture, AWS-only (us-east-1):
+- **Frontend**: React 18 + TypeScript + Tailwind CSS, built with Vite; static build hosted on S3 and served via CloudFront (OAC). The S3 site bucket, CloudFront distribution, ACM cert, and AWS WAF are owned by a separate infra repo (the shadowspire landing zone) — this repo syncs the build to that bucket and invalidates that distribution.
 - **Backend**: AWS Lambda (`portfolio-contact-ingest`) handling the contact form, emailing via Amazon SES
 - **Infrastructure**: OpenTofu (`terraform/`) managing AWS resources (Lambda, IAM, SES, Secrets Manager, SSM)
 
 Live at: https://trystan-tbm.dev
 
-> **Migration status (in progress — branch `aws-deploy`).** The contact backend and infrastructure
-> have moved from Cloudflare to the **shadowspire AWS landing zone** (us-east-1). The **frontend
-> hosting cutover is still underway**: the site is currently served by Cloudflare Pages, with
-> S3 + CloudFront (infra-owned, OAC) as the target. The legacy `worker/` directory and the
-> `worker:*` / `dev:all` npm scripts are vestigial and slated for deletion in the retire phase.
-> Full sequencing, pending external gates, and the end-state architecture live in
-> `docs/superpowers/plans/2026-06-03-aws-cutover-reconciliation.md`. Prefer that plan as the
-> source of truth when it disagrees with anything below.
+> The Cloudflare→AWS migration is **complete**: the contact backend, infrastructure, and frontend
+> hosting all run on the shadowspire AWS landing zone (us-east-1); apex/www/dev all serve from
+> CloudFront→S3. The Cloudflare zone is retained **only** to host DNS and the SES DKIM CNAME records.
+> Historical sequencing lives in `docs/superpowers/plans/2026-06-03-aws-cutover-reconciliation.md`;
+> for operations see `docs/runbooks/aws-contact-backend.md`.
 
 ## Development Commands
 

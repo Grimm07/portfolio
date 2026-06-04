@@ -14,16 +14,6 @@ pre-commit:
         - merge
         - rebase
     
-    # TypeScript type checking (worker)
-    # Validates worker TypeScript code separately (has its own tsconfig)
-    typecheck-worker:
-      run: npm run typecheck
-      root: worker/
-      # Skip during merge/rebase to avoid conflicts
-      skip:
-        - merge
-        - rebase
-    
     # ESLint code linting
     # Checks staged TypeScript/TSX files for code quality issues
     lint:
