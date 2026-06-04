@@ -42,7 +42,6 @@ export default defineConfig({
         moduleSideEffects: (id) => {
           // Mark known side-effect-free modules
           const noSideEffects = [
-            /node_modules\/@marsidev\/react-turnstile/,
             /node_modules\/mermaid/,
           ];
           
