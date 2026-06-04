@@ -6,6 +6,9 @@ name: Deploy
 #
 #   PR / feature branch  -> DEV  (GitHub Environment "dev",        account 176355979099)
 #   push to main         -> PROD (GitHub Environment "production", account 681053994223)
+#
+# The WAF CAPTCHA integration URL (VITE_WAF_INTEGRATION_URL) is published by the infra repo to
+# SSM /portfolio/<env>/waf-integration-url; we read it after OIDC auth and embed it at build.
 
 on:
   push:
@@ -13,7 +16,6 @@ on:
   pull_request:
     branches: [main]
 
-# OIDC: id-token to assume the per-account portfolio-deploy role; contents to checkout.
 permissions:
   id-token: write
   contents: read
@@ -31,19 +33,19 @@ jobs:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     environment: dev
+    env:
+      AWS_ACCOUNT: "176355979099"
+      SITE_BUCKET: shadowspire-dev-site-176355979099
+      DISTRIBUTION_ID: EGFCTGJJEER89
+      SSM_ENV: dev
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Install dependencies
         run: npm ci
-
-      - name: Build site
-        run: npm run build
 
       - name: Configure AWS credentials (OIDC, dev account)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -51,10 +53,22 @@ jobs:
           role-to-assume: arn:aws:iam::176355979099:role/portfolio-deploy
           aws-region: us-east-1
 
-      - name: Sync to S3 + invalidate CloudFront
+      - name: Read WAF CAPTCHA integration URL from SSM
+        id: waf
+        run: |
+          URL=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-integration-url" \
+                  --query Parameter.Value --output text 2>/dev/null || echo "")
+          if [ -z "$URL" ]; then
+            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url not in SSM yet — deploying without CAPTCHA wired"
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Build site
         env:
-          SITE_BUCKET: shadowspire-dev-site-176355979099
-          DISTRIBUTION_ID: EGFCTGJJEER89
+          VITE_WAF_INTEGRATION_URL: ${{ steps.waf.outputs.url }}
+        run: npm run build
+
+      - name: Sync to S3 + invalidate CloudFront
         run: |
           aws s3 sync dist/ "s3://${SITE_BUCKET}/" --delete
           aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"
@@ -68,19 +82,19 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
+    env:
+      AWS_ACCOUNT: "681053994223"
+      SITE_BUCKET: shadowspire-prod-site-681053994223
+      DISTRIBUTION_ID: E229NB0LSTX2V8
+      SSM_ENV: prod
     steps:
       - uses: actions/checkout@v6
-
       - uses: actions/setup-node@v6
         with:
           node-version: '20'
           cache: 'npm'
-
       - name: Install dependencies
         run: npm ci
-
-      - name: Build site
-        run: npm run build
 
       - name: Configure AWS credentials (OIDC, prod account)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -88,10 +102,22 @@ jobs:
           role-to-assume: arn:aws:iam::681053994223:role/portfolio-deploy
           aws-region: us-east-1
 
-      - name: Sync to S3 + invalidate CloudFront
+      - name: Read WAF CAPTCHA integration URL from SSM
+        id: waf
+        run: |
+          URL=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-integration-url" \
+                  --query Parameter.Value --output text 2>/dev/null || echo "")
+          if [ -z "$URL" ]; then
+            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url not in SSM yet — deploying without CAPTCHA wired"
+          fi
+          echo "url=$URL" >> "$GITHUB_OUTPUT"
+
+      - name: Build site
         env:
-          SITE_BUCKET: shadowspire-prod-site-681053994223
-          DISTRIBUTION_ID: E229NB0LSTX2V8
+          VITE_WAF_INTEGRATION_URL: ${{ steps.waf.outputs.url }}
+        run: npm run build
+
+      - name: Sync to S3 + invalidate CloudFront
         run: |
           aws s3 sync dist/ "s3://${SITE_BUCKET}/" --delete
           aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"

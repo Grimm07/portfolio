@@ -19,20 +19,20 @@ const projects: Project[] = [
     title: 'Portfolio Website',
     shortDescription: 'Modern portfolio with glassmorphism design and serverless backend',
     fullDescription:
-      'A fully responsive portfolio website built with React, TypeScript, and Tailwind CSS. Features include glassmorphism UI design, dark/light theme toggle with smooth transitions, animated gradient effects, and a serverless contact form powered by Cloudflare Workers. The backend implements multi-layer spam protection including rate limiting, honeypot fields, time validation, and Turnstile CAPTCHA verification.',
-    tech: ['React', 'TypeScript', 'Tailwind CSS', 'Cloudflare Workers', 'Terraform'],
+      'A fully responsive portfolio website built with React, TypeScript, and Tailwind CSS. Features include glassmorphism UI design, dark/light theme toggle with smooth transitions, and animated gradient effects. The serverless contact pipeline runs entirely on AWS: the static site is served from S3 via CloudFront, and submissions reach an AWS Lambda through CloudFront — protected by AWS WAF CAPTCHA at the edge plus a honeypot, time-trap, and DynamoDB-backed rate limiting — with batched delivery via Amazon SES.',
+    tech: ['React', 'TypeScript', 'Tailwind CSS', 'AWS Lambda', 'CloudFront', 'Terraform'],
     githubUrl: 'https://github.com/Grimm07/portfolio',
     diagram: `graph TD
-    A[User] --> B[Cloudflare Pages]
-    B --> C[React Frontend]
-    C --> D[Contact Form]
-    D --> E[Cloudflare Worker]
-    E --> F{Validation}
-    F -->|Rate Limit| G[In-Memory Store]
-    F -->|Honeypot| H[Bot Detection]
-    F -->|Turnstile| I[CAPTCHA Verify]
-    F -->|Valid| J[MailChannels API]
-    J --> K[Email Delivery]`,
+    A[User] --> B[CloudFront + WAF]
+    B -->|/| C[S3 Static Site]
+    B -->|/api/*| D[Lambda Ingest]
+    D --> E{Validation}
+    E -->|WAF CAPTCHA| F[Edge Challenge]
+    E -->|Honeypot + Time-trap| G[Bot Detection]
+    E -->|Rate Limit| H[DynamoDB]
+    E -->|Valid| I[SQS Queue]
+    I --> J[Notifier Lambda]
+    J --> K[Amazon SES]`,
     status: 'active',
   },
   {
