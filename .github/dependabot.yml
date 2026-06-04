@@ -14,9 +14,11 @@
 # - Efficiency: Reduces manual dependency management overhead
 #
 # This configuration sets up automated dependency updates for:
-# - npm packages (root and worker directories)
-# - Terraform providers
+# - npm packages (root frontend application)
 # - GitHub Actions workflows
+#
+# The contact backend (npm) and its Terraform providers now live in the portfolio-backend
+# repo, which carries its own Dependabot config.
 
 version: 2
 updates:
@@ -38,28 +40,6 @@ updates:
     #   - dependency-type: "development"
     #   - dependency-type: "production"
     #   - update-type: "security"
-
-  # Worker npm dependencies (Cloudflare Worker backend)
-  - package-ecosystem: "npm"
-    directory: "/worker"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-    rebase-strategy: "auto"
-
-  # Terraform providers (infrastructure as code)
-  - package-ecosystem: "terraform"
-    directory: "/terraform"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-    open-pull-requests-limit: 3
-    labels:
-      - "dependencies"
-    rebase-strategy: "auto"
 
   # GitHub Actions workflows (CI/CD automation)
   - package-ecosystem: "github-actions"
