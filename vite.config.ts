@@ -9,6 +9,12 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: './src/test/setup.ts',
     css: true,
+    // Scope discovery to the frontend only. backend/ and worker/ are separate npm
+    // workspaces with their own deps (e.g. aws-sdk-client-mock) and own test runners;
+    // without this, the root run globs their *.test.ts and fails in CI, which installs
+    // only root deps. They are tested in their own jobs.
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
+    exclude: ['**/node_modules/**', 'dist/**', 'backend/**', 'worker/**', 'terraform/**'],
   },
   resolve: {
     // Ensure proper handling of dayjs CommonJS module

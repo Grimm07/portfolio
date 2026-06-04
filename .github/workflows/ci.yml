@@ -42,6 +42,37 @@ jobs:
         run: npm run test:run
 
   # =============================================================================
+  # BACKEND TESTS - the AWS Lambda code is a separate npm workspace with its own
+  # deps (aws-sdk-client-mock) and vitest config. The root validate job installs
+  # only root deps, so backend tests must run here with backend deps installed.
+  # =============================================================================
+  test-backend:
+    name: Test Backend
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Backend type check
+        working-directory: backend
+        run: npm run typecheck
+
+      - name: Run backend tests
+        working-directory: backend
+        run: npm test
+
+  # =============================================================================
   # SECURITY AUDIT JOB - npm audit across all three workspaces
   # Starts NON-BLOCKING (|| true) to avoid breaking CI on pre-existing dev-tool
   # noise. TODO: remove the "|| true" and tighten to a hard gate now that all
@@ -142,22 +173,22 @@ jobs:
           name: worker-dist
           path: worker/dist/
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
         with:
-          terraform_version: "1.6"
+          tofu_version: "1.12.1"
 
-      - name: Terraform Format Check
+      - name: OpenTofu Format Check
         working-directory: terraform
-        run: terraform fmt -check -recursive -diff
+        run: tofu fmt -check -recursive -diff
 
-      - name: Terraform Init (no backend)
+      - name: OpenTofu Init (no backend)
         working-directory: terraform
-        run: terraform init -backend=false
+        run: tofu init -backend=false
 
-      - name: Terraform Validate
+      - name: OpenTofu Validate
         working-directory: terraform
-        run: terraform validate
+        run: tofu validate
 
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v6
@@ -173,24 +204,58 @@ jobs:
         run: tflint --format compact
 
   # =============================================================================
-  # DEPLOY JOB - Downloads artifacts, applies Terraform
+  # DEPLOY FRONTEND - Publishes the built SPA. DECOUPLED from infra/terraform so the
+  # site keeps shipping even while the AWS infra apply / state migration is in flight.
+  # Still targets Cloudflare Pages until Plan 2b's CloudFront/S3 edge is applied and
+  # verified; the cutover to `aws s3 sync` + invalidation is Plan 2c.
   # =============================================================================
-  deploy:
-    name: Deploy
+  deploy-frontend:
+    name: Deploy Frontend
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [validate, build, terraform]
+    needs: [validate, test-backend, build]
     environment: production
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      # Download pre-built artifacts
       - name: Download frontend build
         uses: actions/download-artifact@v4
         with:
           name: frontend-dist
           path: dist/
+
+      - name: Deploy frontend to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist/ --project-name trystan-portfolio --branch main
+
+  # =============================================================================
+  # DEPLOY INFRA - OpenTofu apply against the S3 backend, authenticated via GitHub OIDC.
+  #
+  # ⚠️ ONE-TIME PREREQUISITE before this job's apply will succeed:
+  #   1. Create the GitHub OIDC identity provider + an IAM deploy role in AWS; expose its
+  #      ARN as the repo secret AWS_DEPLOY_ROLE_ARN (trust: repo:Grimm07/portfolio).
+  #   2. Provide the state bucket name as the repo secret TF_STATE_BUCKET.
+  #   3. Migrate existing state GitLab(http) -> S3 ONCE (locally, with both creds):
+  #        tofu init -migrate-state -backend-config="bucket=$TF_STATE_BUCKET"
+  #      Otherwise a fresh S3 state will try to re-create live Cloudflare resources.
+  # The frontend deploy above is independent, so prod keeps serving regardless of this job.
+  # =============================================================================
+  deploy-infra:
+    name: Deploy Infra
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [validate, test-backend, build, terraform]
+    environment: production
+    permissions:
+      id-token: write # required for GitHub OIDC -> AWS
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
       - name: Download worker build
         uses: actions/download-artifact@v4
@@ -198,54 +263,39 @@ jobs:
           name: worker-dist
           path: worker/dist/
 
-      - name: Verify artifacts
-        run: |
-          echo "✓ Frontend: $(find dist -type f | wc -l) files"
-          echo "✓ Worker: $(ls -la worker/dist/index.js)"
-
-      # Terraform deployment
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          terraform_version: "1.6"
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
 
-      - name: Terraform Init
+      - name: Setup OpenTofu
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: "1.12.1"
+
+      - name: OpenTofu Init (S3 backend)
+        working-directory: terraform
+        run: tofu init -backend-config="bucket=${{ secrets.TF_STATE_BUCKET }}"
+
+      - name: OpenTofu Plan
         working-directory: terraform
         env:
-          TF_HTTP_USERNAME: gitlab-ci-token
-          TF_HTTP_PASSWORD: ${{ secrets.GITLAB_ACCESS_TOKEN }}
-        run: terraform init
-
-      - name: Terraform Plan
-        working-directory: terraform
-        env:
-          TF_HTTP_USERNAME: gitlab-ci-token
-          TF_HTTP_PASSWORD: ${{ secrets.GITLAB_ACCESS_TOKEN }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
           TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
           TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
-        run: terraform plan -out=tfplan
+        run: tofu plan -out=tfplan
 
-      - name: Terraform Apply
+      - name: OpenTofu Apply
         working-directory: terraform
         env:
-          TF_HTTP_USERNAME: gitlab-ci-token
-          TF_HTTP_PASSWORD: ${{ secrets.GITLAB_ACCESS_TOKEN }}
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
           TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
           TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
           TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
-        run: terraform apply -auto-approve tfplan
-
-      # Deploy frontend to Cloudflare Pages (after Terraform ensures infra is ready)
-      - name: Deploy frontend to Cloudflare Pages
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist/ --project-name trystan-portfolio --branch main
+        run: tofu apply -auto-approve tfplan
