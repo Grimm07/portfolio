@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "github-account": {
+      "command": "/home/grimm/code/agent-tools/mcps/github-account/bin/github-account",
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      }
+    },
+    "aws-resources": {
+      "command": "/home/grimm/code/agent-tools/mcps/aws-resources/bin/aws-resources"
+    },
+    "project-mcp": {
+      "command": "/home/grimm/code/agent-tools/mcps/portfolio-mcp/bin/portfolio-mcp",
+      "env": {
+        "PROJECT_MCP_CONFIG": "/home/grimm/code/agent-tools/mcps/portfolio-mcp/project-mcp.toml"
+      }
+    }
+  }
+}
