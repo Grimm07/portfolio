@@ -53,22 +53,22 @@ export default defineConfig({
           // Default: let Rollup analyze the module
           return null;
         },
-        // Preserve class names for better tree-shaking
-        preset: 'smallest',
         // Property read side effects
         propertyReadSideEffects: false,
-        // Try-catch side effects
-        tryCatchDeoptimization: false,
       },
       // Allow better tree-shaking by not preserving entry signatures
       preserveEntrySignatures: 'exports-only',
       output: {
-        // Manual chunk splitting for better caching
-        manualChunks: {
-          // Vendor chunks
-          'react-vendor': ['react', 'react-dom'],
-          // Mermaid.js is large, split it into its own chunk
-          'mermaid': ['mermaid'],
+        // Manual chunk splitting for better caching. Vite 8 / Rolldown replaced
+        // the `manualChunks` map with `codeSplitting.groups` ({ name, test } matchers).
+        codeSplitting: {
+          groups: [
+            // React vendor chunk (include scheduler — react-dom's runtime dep — so the
+            // whole React runtime stays in one long-cacheable chunk, as before).
+            { name: 'react-vendor', test: /[\\/]node_modules[\\/](react|react-dom|scheduler)[\\/]/ },
+            // Mermaid.js is large, split it into its own chunk
+            { name: 'mermaid', test: /[\\/]node_modules[\\/]mermaid[\\/]/ },
+          ],
         },
         // Optimize chunk file names
         chunkFileNames: 'assets/js/[name]-[hash].js',
