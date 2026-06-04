@@ -32,5 +32,6 @@ describe('sendContactEmail', () => {
     expect(input.Message?.Subject?.Data).toContain('Alice');
     expect(input.Message?.Body?.Text?.Data).toContain('hello there');
     expect(input.Message?.Body?.Text?.Data).toContain('1.2.3.4');
+    expect(input.Message?.Body?.Text?.Data).toContain('2026-06-03T00:00:00.000Z');
   });
 });

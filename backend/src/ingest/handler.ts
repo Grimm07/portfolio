@@ -50,15 +50,15 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
   if (typeof parsed !== 'object' || parsed === null) return json(400, { error: 'Invalid request' });
   const sub = parsed as Partial<ContactSubmission>;
 
-  // Layer 2: honeypot — silently accept (200) so bots get no signal, but send nothing.
+  // Honeypot — silently accept (200) so bots get no signal, but send nothing.
   if (isHoneypotTripped(sub)) return json(200, { ok: true });
 
-  // Layer 3: time-trap.
+  // Time-trap.
   if (typeof sub.formTimestamp !== 'number' || isTooFast(sub.formTimestamp, ts)) {
     return json(400, { error: 'Submission too fast' });
   }
 
-  // Layer 5: field validation.
+  // Field validation.
   if (typeof sub.email !== 'string' || !isValidEmail(sub.email)) return json(400, { error: 'Invalid email' });
   if (typeof sub.name !== 'string' || sub.name.trim().length === 0) return json(400, { error: 'Invalid name' });
   if (!isValidMessage(sub.message)) return json(400, { error: 'Invalid message' });
@@ -72,9 +72,8 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
   const ip = extractClientIp(event.headers);
   const createdAt = new Date(ts).toISOString();
 
-  const to = await getSecret(clients.secrets, env.CONTACT_EMAIL_SECRET_ARN);
-
   try {
+    const to = await getSecret(clients.secrets, env.CONTACT_EMAIL_SECRET_ARN);
     await sendContactEmail(clients.ses, { from: env.FROM_EMAIL, to, replyTo: email, name, email, message, ip, createdAt });
   } catch {
     return json(500, { error: 'Failed to send message' });

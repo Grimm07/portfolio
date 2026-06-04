@@ -93,4 +93,11 @@ describe('handleIngest', () => {
     const res = await handleIngest(event(), deps());
     expect(res.statusCode).toBe(500);
   });
+
+  it('returns 500 when Secrets Manager fetch fails and sends no email', async () => {
+    sm.on(GetSecretValueCommand).rejects(new Error('SM down'));
+    const res = await handleIngest(event(), deps());
+    expect(res.statusCode).toBe(500);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
+  });
 });
