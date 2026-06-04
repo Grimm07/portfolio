@@ -1,28 +1,21 @@
-# Remote Backend — AWS S3
+# Remote backend — AWS S3, one state object per environment in that env's OWN account.
 #
-# State lives in the TF_STATE_BUCKET S3 bucket (provided in CI). Migrated off the GitLab
-# HTTP backend so state sits alongside the AWS resources and CI authenticates via GitHub
-# OIDC (no GitLab token needed).
+# dev  -> bucket shadowspire-dev-state-176355979099  (account 176355979099)
+# prod -> bucket shadowspire-prod-state-681053994223 (account 681053994223)
 #
-# The bucket name is environment/CI-specific, so it is passed at init via partial
-# backend-config rather than hardcoded here:
+# Because dev and prod are separate AWS accounts, each env's portfolio-deploy role can only
+# reach its own state bucket. So `bucket` and `dynamodb_table` are NOT hardcoded here — they
+# are supplied per-env at init via partial backend config:
 #
-#   tofu init -backend-config="bucket=$TF_STATE_BUCKET"
+#   tofu init -backend-config=backend-dev.hcl     # or backend-prod.hcl
 #
-# (TF_STATE_BUCKET is available in CI.) Everything else is fixed below.
-#
-# Per-env state separation uses OpenTofu workspaces under the same bucket — S3 backends
-# support workspaces natively (unlike the old http backend):
-#   prod -> `default` workspace -> s3://$TF_STATE_BUCKET/portfolio/terraform.tfstate
-#   dev  -> `tofu workspace select -or-create dev` -> .../env:/dev/portfolio/terraform.tfstate
-#
-# Locking uses S3-native conditional writes (use_lockfile) — no DynamoDB lock table needed.
-# Requires OpenTofu >= 1.10 (CI uses `tofu`, not the legacy `terraform` 1.6 binary).
+# State locking uses the env's shadowspire-<env>-tf-lock DynamoDB table.
 terraform {
   backend "s3" {
-    key          = "portfolio/terraform.tfstate"
-    region       = "us-east-1"
-    encrypt      = true
-    use_lockfile = true
+    key     = "portfolio/terraform.tfstate"
+    region  = "us-east-1"
+    encrypt = true
+    # bucket         = (per-env, via -backend-config)
+    # dynamodb_table = (per-env, via -backend-config)
   }
 }

@@ -1,31 +1,24 @@
 // backend/src/ingest/handler.ts
-import type { S3Client } from '@aws-sdk/client-s3';
-import type { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
-import type { SQSClient } from '@aws-sdk/client-sqs';
-import { S3Client as S3 } from '@aws-sdk/client-s3';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient as Doc } from '@aws-sdk/lib-dynamodb';
-import { SQSClient as SQS } from '@aws-sdk/client-sqs';
+import type { SESClient } from '@aws-sdk/client-ses';
+import type { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { SESClient as SES } from '@aws-sdk/client-ses';
+import { SecretsManagerClient as SM } from '@aws-sdk/client-secrets-manager';
 
-import type { ContactSubmission, StoredMessage, ContactRecord, NotificationMessage } from '../shared/types';
+import type { ContactSubmission } from '../shared/types';
 import { isHoneypotTripped, isTooFast, isValidEmail, isValidMessage, sanitizeName } from '../shared/validation';
 import { extractClientIp } from './ip';
-import { checkRateLimit } from './rateLimit';
-import { putMessageBody, putContactRecord } from './store';
-import { enqueueNotification } from './enqueue';
+import { getSecret } from '../shared/secrets';
+import { sendContactEmail } from './email';
 
 export interface IngestEnv {
-  MESSAGES_BUCKET: string;
-  CONTACTS_TABLE: string;
-  RATE_LIMIT_TABLE: string;
-  NOTIFICATION_QUEUE_URL: string;
+  FROM_EMAIL: string;                 // verified SES identity (noreply@<domain>)
+  CONTACT_EMAIL_SECRET_ARN: string;   // Secrets Manager ARN holding the recipient address
 }
 
 export interface IngestDeps {
   env: IngestEnv;
-  clients: { s3: S3Client; doc: DynamoDBDocumentClient; sqs: SQSClient };
+  clients: { ses: SESClient; secrets: SecretsManagerClient };
   now: () => number;
-  uuid: () => string;
 }
 
 interface FunctionUrlEvent {
@@ -43,9 +36,9 @@ function json(statusCode: number, payload: unknown): FunctionUrlResult {
 }
 
 export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): Promise<FunctionUrlResult> {
-  const { env, clients, now, uuid } = deps;
+  const { env, clients, now } = deps;
 
-  // Snapshot now() once — reused for time-trap, rate-limit seconds, and createdAt.
+  // Snapshot now() once — reused for time-trap and createdAt.
   const ts = now();
 
   let parsed: unknown;
@@ -57,69 +50,44 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
   if (typeof parsed !== 'object' || parsed === null) return json(400, { error: 'Invalid request' });
   const sub = parsed as Partial<ContactSubmission>;
 
-  // Layer 2: honeypot — silently accept (200) so bots get no signal, but persist nothing.
+  // Honeypot — silently accept (200) so bots get no signal, but send nothing.
   if (isHoneypotTripped(sub)) return json(200, { ok: true });
 
-  // Layer 3: time-trap.
+  // Time-trap.
   if (typeof sub.formTimestamp !== 'number' || isTooFast(sub.formTimestamp, ts)) {
     return json(400, { error: 'Submission too fast' });
   }
 
-  // Layer 5: field validation (cheap) before the network call.
+  // Field validation.
   if (typeof sub.email !== 'string' || !isValidEmail(sub.email)) return json(400, { error: 'Invalid email' });
   if (typeof sub.name !== 'string' || sub.name.trim().length === 0) return json(400, { error: 'Invalid name' });
   if (!isValidMessage(sub.message)) return json(400, { error: 'Invalid message' });
 
-  // Narrowed to string after guards above.
-  const rawEmail: string = sub.email;
-  const rawName: string = sub.name;
-  const rawMessage: string = sub.message as string;
+  // NOTE: CAPTCHA + rate-limiting are enforced by AWS WAF at the edge before the request
+  // reaches this Lambda. There is no token check and no per-IP counter here.
 
+  const name = sanitizeName(sub.name);
+  const email = sub.email.toLowerCase();
+  const message: string = sub.message as string;
   const ip = extractClientIp(event.headers);
-
-  // NOTE: CAPTCHA (human verification) is enforced by AWS WAF at the edge before the
-  // request reaches this Lambda — there is no token check here.
-
-  // Layer 1: rate limit (after cheap checks, before writes).
-  const nowSec = Math.floor(ts / 1000);
-  if (!(await checkRateLimit(clients.doc, env.RATE_LIMIT_TABLE, ip, nowSec))) {
-    return json(429, { error: 'Too many requests' });
-  }
-
-  // Persist.
-  const id = uuid();
   const createdAt = new Date(ts).toISOString();
-  const name = sanitizeName(rawName);
-  const email = rawEmail.toLowerCase();
 
-  const message: StoredMessage = { id, name, email, message: rawMessage, createdAt, ip, userAgent: event.headers['user-agent'] ?? '' };
-  const s3Key = await putMessageBody(clients.s3, env.MESSAGES_BUCKET, message);
-
-  const record: ContactRecord = {
-    pk: `EMAIL#${email}`, sk: `SUB#${createdAt}#${id}`, gsi1pk: 'ALL', gsi1sk: createdAt,
-    id, name, email, ip, userAgent: message.userAgent, createdAt,
-    s3Bucket: env.MESSAGES_BUCKET, s3Key, status: 'new',
-  };
-  await putContactRecord(clients.doc, env.CONTACTS_TABLE, record);
-
-  const note: NotificationMessage = { id, email, s3Bucket: env.MESSAGES_BUCKET, s3Key };
-  await enqueueNotification(clients.sqs, env.NOTIFICATION_QUEUE_URL, note);
+  try {
+    const to = await getSecret(clients.secrets, env.CONTACT_EMAIL_SECRET_ARN);
+    await sendContactEmail(clients.ses, { from: env.FROM_EMAIL, to, replyTo: email, name, email, message, ip, createdAt });
+  } catch {
+    return json(500, { error: 'Failed to send message' });
+  }
 
   return json(200, { ok: true });
 }
 
 // --- Lambda entrypoint (constructs real clients once per container) ---
 const env: IngestEnv = {
-  MESSAGES_BUCKET: process.env.MESSAGES_BUCKET!,
-  CONTACTS_TABLE: process.env.CONTACTS_TABLE!,
-  RATE_LIMIT_TABLE: process.env.RATE_LIMIT_TABLE!,
-  NOTIFICATION_QUEUE_URL: process.env.NOTIFICATION_QUEUE_URL!,
+  FROM_EMAIL: process.env.FROM_EMAIL!,
+  CONTACT_EMAIL_SECRET_ARN: process.env.CONTACT_EMAIL_SECRET_ARN!,
 };
-const clients = {
-  s3: new S3({}),
-  doc: Doc.from(new DynamoDBClient({})),
-  sqs: new SQS({}),
-};
+const clients = { ses: new SES({}), secrets: new SM({}) };
 
 export const handler = (event: FunctionUrlEvent): Promise<FunctionUrlResult> =>
-  handleIngest(event, { env, clients, now: () => Date.now(), uuid: () => crypto.randomUUID() });
+  handleIngest(event, { env, clients, now: () => Date.now() });

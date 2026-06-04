@@ -43,13 +43,13 @@ export function Footer() {
           </a>
           , and{' '}
           <a
-            href="https://workers.cloudflare.com"
+            href="https://aws.amazon.com/lambda/"
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:text-primary-light transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
-            aria-label="Cloudflare Workers (opens in new tab)"
+            aria-label="AWS Lambda (opens in new tab)"
           >
-            Cloudflare Workers
+            AWS Lambda
           </a>
         </p>
         <a

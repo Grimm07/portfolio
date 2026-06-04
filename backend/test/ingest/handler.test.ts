@@ -1,85 +1,68 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { mockClient } from 'aws-sdk-client-mock';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { DynamoDBDocumentClient, UpdateCommand, PutCommand } from '@aws-sdk/lib-dynamodb';
-import { SQSClient, SendMessageCommand } from '@aws-sdk/client-sqs';
+import { SESClient, SendEmailCommand } from '@aws-sdk/client-ses';
+import { SecretsManagerClient, GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 import { handleIngest } from '../../src/ingest/handler';
+import { __clearSecretCache } from '../../src/shared/secrets';
 
-const s3 = mockClient(S3Client);
-const ddb = mockClient(DynamoDBDocumentClient);
-const sqs = mockClient(SQSClient);
+const ses = mockClient(SESClient);
+const sm = mockClient(SecretsManagerClient);
 
-// CAPTCHA is enforced by AWS WAF at the edge — the Lambda does NOT verify a token,
-// so there is no Secrets Manager client and no fetch stub here.
 const ENV = {
-  MESSAGES_BUCKET: 'bucket', CONTACTS_TABLE: 'contacts', RATE_LIMIT_TABLE: 'rate-limits',
-  NOTIFICATION_QUEUE_URL: 'https://sqs/q',
+  FROM_EMAIL: 'noreply@trystan-tbm.dev',
+  CONTACT_EMAIL_SECRET_ARN: 'arn:aws:secretsmanager:us-east-1:111:secret:contact-email',
 };
 
-// A valid submission: honeypot empty, old enough timestamp. No turnstileToken (WAF handles CAPTCHA).
+// A valid submission: honeypot empty, old-enough timestamp. No turnstileToken (WAF handles CAPTCHA).
 function event(overrides: Record<string, unknown> = {}) {
   const body = JSON.stringify({
     name: 'Alice', email: 'a@b.co', message: 'hello there',
     website: '', formTimestamp: 0, ...overrides,
   });
-  return {
-    headers: { 'x-forwarded-for': '1.2.3.4', 'user-agent': 'UA' },
-    body,
-  } as never;
+  return { headers: { 'x-forwarded-for': '1.2.3.4', 'user-agent': 'UA' }, body } as never;
 }
 
 const deps = () => ({
   env: ENV,
-  clients: {
-    s3: new S3Client({}), doc: DynamoDBDocumentClient.from(new DynamoDBClient({})), sqs: new SQSClient({}),
-  },
+  clients: { ses: new SESClient({}), secrets: new SecretsManagerClient({}) },
   now: () => 10_000, // 10s > MIN_FORM_TIME_MS past formTimestamp=0
-  uuid: () => 'fixed-id',
 });
 
 beforeEach(() => {
-  s3.reset(); ddb.reset(); sqs.reset();
-  ddb.on(UpdateCommand).resolves({});
-  ddb.on(PutCommand).resolves({});
-  s3.on(PutObjectCommand).resolves({});
-  sqs.on(SendMessageCommand).resolves({ MessageId: 'm1' });
+  ses.reset();
+  sm.reset();
+  __clearSecretCache();
+  sm.on(GetSecretValueCommand).resolves({ SecretString: 'owner@example.com' });
+  ses.on(SendEmailCommand).resolves({ MessageId: 'm1' });
 });
 
 describe('handleIngest', () => {
-  it('persists, enqueues, and returns 200 for a valid submission', async () => {
+  it('sends one email and returns 200 for a valid submission', async () => {
     const res = await handleIngest(event(), deps());
     expect(res.statusCode).toBe(200);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(1);
-    expect(ddb.commandCalls(PutCommand)).toHaveLength(1);     // contact record
-    expect(sqs.commandCalls(SendMessageCommand)).toHaveLength(1);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(1);
+    const input = ses.commandCalls(SendEmailCommand)[0].args[0].input;
+    expect(input.Destination?.ToAddresses).toEqual(['owner@example.com']);
+    expect(input.ReplyToAddresses).toEqual(['a@b.co']);
   });
 
-  it('rejects a tripped honeypot with 200 but no persistence (silent)', async () => {
+  it('rejects a tripped honeypot with 200 but sends nothing (silent)', async () => {
     const res = await handleIngest(event({ website: 'spam' }), deps());
     expect(res.statusCode).toBe(200);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
-    expect(sqs.commandCalls(SendMessageCommand)).toHaveLength(0);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 
-  it('rejects too-fast submissions with 400', async () => {
+  it('rejects too-fast submissions with 400 and sends nothing', async () => {
     const d = deps(); d.now = () => 1000; // 1s after formTimestamp=0
     const res = await handleIngest(event(), d);
     expect(res.statusCode).toBe(400);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 
   it('rejects invalid email with 400', async () => {
     const res = await handleIngest(event({ email: 'nope' }), deps());
     expect(res.statusCode).toBe(400);
-  });
-
-  it('returns 429 when rate limited', async () => {
-    const err = new Error('limit'); err.name = 'ConditionalCheckFailedException';
-    ddb.on(UpdateCommand).rejects(err);
-    const res = await handleIngest(event(), deps());
-    expect(res.statusCode).toBe(429);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 
   it('returns 400 on malformed JSON', async () => {
@@ -92,24 +75,29 @@ describe('handleIngest', () => {
     const bad = { headers: { 'x-forwarded-for': '1.2.3.4' }, body: 'null' } as never;
     const res = await handleIngest(bad, deps());
     expect(res.statusCode).toBe(400);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 
   it('returns 400 when message is a number (non-string field)', async () => {
-    const res = await handleIngest(
-      event({ message: 123 }),
-      deps(),
-    );
+    const res = await handleIngest(event({ message: 123 }), deps());
     expect(res.statusCode).toBe(400);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
   });
 
   it('returns 400 when name is a number (non-string name)', async () => {
-    const res = await handleIngest(
-      event({ name: 123 }),
-      deps(),
-    );
+    const res = await handleIngest(event({ name: 123 }), deps());
     expect(res.statusCode).toBe(400);
-    expect(s3.commandCalls(PutObjectCommand)).toHaveLength(0);
+  });
+
+  it('returns 500 when SES send fails', async () => {
+    ses.on(SendEmailCommand).rejects(new Error('SES down'));
+    const res = await handleIngest(event(), deps());
+    expect(res.statusCode).toBe(500);
+  });
+
+  it('returns 500 when Secrets Manager fetch fails and sends no email', async () => {
+    sm.on(GetSecretValueCommand).rejects(new Error('SM down'));
+    const res = await handleIngest(event(), deps());
+    expect(res.statusCode).toBe(500);
+    expect(ses.commandCalls(SendEmailCommand)).toHaveLength(0);
   });
 });

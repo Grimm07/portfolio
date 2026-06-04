@@ -1,8 +1,8 @@
 # CONTACT_EMAIL stored in Secrets Manager (not a plaintext Lambda env var), per the
-# project's privacy-first posture. The Notifier fetches it at runtime (cached per container).
+# project's privacy-first posture. The ingest Lambda fetches it at runtime (cached per container).
 resource "aws_secretsmanager_secret" "contact_email" {
   name        = "${local.name_prefix}-contact-email"
-  description = "Recipient address for contact form digest emails"
+  description = "Recipient address for contact form emails"
 }
 
 resource "aws_secretsmanager_secret_version" "contact_email" {
