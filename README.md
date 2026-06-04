@@ -3,7 +3,7 @@
 [![CI](https://github.com/trystan-tbm/portfolio/workflows/CI/badge.svg)](https://github.com/trystan-tbm/portfolio/actions/workflows/ci.yml)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.6-blue.svg)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.3-blue.svg)](https://react.dev/)
-[![Cloudflare](https://img.shields.io/badge/Cloudflare-Pages%20%2B%20Workers-orange.svg)](https://www.cloudflare.com/)
+[![AWS](https://img.shields.io/badge/AWS-Lambda%20%2B%20S3%20%2B%20CloudFront-orange.svg)](https://aws.amazon.com/)
 
 > **Live Demo:** [trystan-tbm.dev](https://trystan-tbm.dev)
 
@@ -17,7 +17,7 @@ Personal portfolio website for **Trystan Bates-Maricle** - AI/ML Engineer | Full
 - [Features](#features)
 - [Architecture](#architecture)
 - [Local Development](#local-development)
-- [Worker Development](#worker-development)
+- [Contact Backend (Lambda)](#contact-backend-lambda)
 - [Deployment](#deployment)
 - [Environment Variables](#environment-variables)
 - [Project Structure](#project-structure)
@@ -31,7 +31,7 @@ Personal portfolio website for **Trystan Bates-Maricle** - AI/ML Engineer | Full
 
 ## Project Overview
 
-This is a modern, production-ready portfolio website showcasing AI/ML engineering expertise, built with a focus on security, performance, and maintainability.
+This is a modern, production-ready portfolio website showcasing AI/ML engineering expertise, built with a focus on security, performance, and maintainability. It runs entirely on AWS (region `us-east-1`).
 
 ### Tech Stack Summary
 
@@ -40,16 +40,22 @@ This is a modern, production-ready portfolio website showcasing AI/ML engineerin
 - **React 18.3+** - UI library
 - **TypeScript 5.6+** - Type-safe JavaScript
 - **Tailwind CSS 3.4+** - Utility-first CSS framework
+- **Amazon S3 + CloudFront** - Static hosting and CDN (Origin Access Control)
 
 **Backend:**
-- **Cloudflare Workers** - Serverless edge computing
-- **Cloudflare Turnstile** - Privacy-first CAPTCHA
-- **MailChannels** - Email delivery (free for Workers)
+- **AWS Lambda** (`portfolio-contact-ingest`) - Serverless contact form handler (TypeScript, ESM)
+- **Lambda Function URL** (`AWS_IAM` auth, fronted by CloudFront OAC)
+- **Amazon SES** - Transactional email delivery
+- **AWS Secrets Manager** - Stores the contact recipient address (read at runtime)
+- **AWS WAF** - CAPTCHA + rate limiting at the CloudFront edge
 
 **Infrastructure:**
-- **Cloudflare Pages** - Static site hosting
-- **Terraform** - Infrastructure as Code
-- **GitHub Actions** - CI/CD automation
+- **OpenTofu** (`tofu` CLI) - Infrastructure as Code, AWS-only, per-env S3 state
+- **GitHub Actions** (OIDC) - CI/CD automation, no long-lived AWS keys
+
+> The S3 bucket, CloudFront distribution, and AWS WAF that serve the site are **owned by a separate
+> infrastructure repository** (the "shadowspire" AWS landing zone). This repository does not create
+> them; it syncs the build to the infra-owned bucket and invalidates the infra-owned distribution.
 
 ---
 
@@ -63,17 +69,16 @@ This is a modern, production-ready portfolio website showcasing AI/ML engineerin
 
 ### 🔒 Security-First
 - **No Contact Info in Code** - Email/phone never exposed (contact form only)
-- **Multi-Layer Spam Protection:**
-  - Cloudflare Turnstile CAPTCHA
-  - Honeypot field (hidden input trap)
-  - Rate limiting (3 submissions/hour per IP)
-  - Time validation (reject submissions < 3 seconds)
-  - Server-side email format validation
-- **Secrets Management** - All sensitive data via environment variables and Terraform
+- **Multi-Layer Spam Protection (defense in depth):**
+  - AWS WAF CAPTCHA + rate limiting at the CloudFront edge (before requests reach the Lambda)
+  - Honeypot field (hidden `website` input trap)
+  - Time-trap (reject submissions faster than a minimum form-fill time)
+  - Server-side field validation (email, name, message)
+- **Secrets Management** - Recipient address lives in AWS Secrets Manager; all config via env vars and OpenTofu
 
 ### ⚡ Performance
-- **Serverless Architecture** - Edge computing with Cloudflare Workers
-- **Static Site Generation** - Fast page loads with Vite
+- **Serverless Architecture** - On-demand Lambda for the contact backend
+- **Static Site Generation** - Fast page loads with Vite, served from CloudFront
 - **Optimized Builds** - Tree-shaking, code splitting, minification
 - **Lazy Loading** - Mermaid.js diagrams loaded on-demand
 - **Font Optimization** - Preconnect + font-display: swap for faster font loading
@@ -82,7 +87,7 @@ This is a modern, production-ready portfolio website showcasing AI/ML engineerin
 
 ### 🛠️ Developer Experience
 - **TypeScript Strict Mode** - Type safety throughout
-- **Infrastructure as Code** - Terraform for reproducible deployments
+- **Infrastructure as Code** - OpenTofu for reproducible deployments
 - **Automated CI/CD** - GitHub Actions for linting, type-checking, and deployment
 - **Hot Module Replacement** - Instant feedback during development
 
@@ -90,27 +95,35 @@ This is a modern, production-ready portfolio website showcasing AI/ML engineerin
 
 ## Architecture
 
-The portfolio consists of three main components:
+The portfolio is a three-tier, AWS-only application:
 
-### 1. Frontend (React + Vite)
-- Static site built with React and TypeScript
-- Styled with Tailwind CSS
-- Deployed to Cloudflare Pages
-- Automatic deployments on push to `main` branch
+### 1. Frontend (React + Vite → S3 + CloudFront)
+- Static site built with React and TypeScript, styled with Tailwind CSS
+- Built to static assets and synced to an S3 bucket
+- Served via Amazon CloudFront using Origin Access Control (OAC)
+- The S3 bucket, CloudFront distribution, and AWS WAF are owned by the separate infrastructure
+  repository; this repo only uploads the build and invalidates the distribution
+- Hosts: prod `trystan-tbm.dev` + `www.trystan-tbm.dev`, dev `dev.trystan-tbm.dev`
 
-### 2. Backend (Cloudflare Workers)
-- Serverless contact form handler
-- Validates Turnstile CAPTCHA tokens
-- Implements rate limiting and spam protection
-- Sends emails via MailChannels API
+### 2. Contact Backend (AWS Lambda)
+- A single `portfolio-contact-ingest` Lambda (TypeScript, bundled with esbuild to ESM)
+- Invoked through an `AWS_IAM`-authenticated Lambda Function URL fronted by CloudFront (OAC)
+- Handler pipeline: parse JSON → honeypot check (`website` field) → time-trap → field validation
+  (email / name / message) → send one email via Amazon SES (`Reply-To` = submitter's email)
+- The recipient address is read at runtime from AWS Secrets Manager and is never hardcoded
 
-### 3. Infrastructure (Terraform)
-- Manages Cloudflare Pages project
-- Configures DNS records (root + www)
-- Deploys Worker with secret bindings
-- Sets up custom domain routing
+### 3. Infrastructure (OpenTofu)
+- AWS-only, managed with the `tofu` CLI in `terraform/`
+- Per-env S3 state backend: each environment uses its own account-scoped
+  `shadowspire-<env>-state-*` bucket and `shadowspire-<env>-tf-lock` DynamoDB lock,
+  selected via `-backend-config=backend-<env>.hcl`
+- Manages: the ingest Lambda + IAM role (SES send + secret read only), the `AWS_IAM` Function URL,
+  the SES domain identity + DKIM, the contact-email secret, the SSM handshake, and the
+  CloudFront-OAC invoke permission
+- The `cloudflare` provider is retained for **one reason only**: managing the SES DKIM CNAME records,
+  because DNS is still hosted in the Cloudflare zone. All other Cloudflare resources are gone.
 
-**Architecture Diagrams:** View detailed architecture diagrams on the [live site](https://trystan-tbm.dev) (Phase 2 feature).
+**Architecture Diagrams:** View detailed architecture diagrams on the [live site](https://trystan-tbm.dev).
 
 ---
 
@@ -121,6 +134,7 @@ The portfolio consists of three main components:
 - **Node.js** 18+ or 20+ ([download](https://nodejs.org/))
 - **npm** (comes with Node.js)
 - **Git** (for cloning the repository)
+- **OpenTofu** (`tofu`) - only needed for infrastructure work
 
 ### Installation
 
@@ -139,7 +153,7 @@ The portfolio consists of three main components:
    ```bash
    # Copy example environment file (if .env.example exists)
    cp .env.example .env
-   # Edit .env with your local configuration (if needed)
+   # Edit .env with your local configuration (see Environment Variables)
    ```
 
 4. **Start development server:**
@@ -154,17 +168,12 @@ The portfolio consists of three main components:
 ```bash
 # Development
 npm run dev          # Start Vite dev server with HMR
-npm run dev:all      # Start both Vite and Worker dev servers in parallel
-npm run build        # Build for production (outputs to dist/)
+npm run build        # Build for production (tsc + vite build, outputs to dist/)
 npm run preview      # Preview production build locally
 
 # Code Quality
 npm run lint         # Run ESLint
 npx tsc --noEmit     # Type check without emitting files
-
-# Worker (see Worker Development section)
-npm run worker:dev      # Start Worker dev server
-npm run worker:deploy   # Deploy Worker to Cloudflare
 ```
 
 ### Development Tips
@@ -176,202 +185,118 @@ npm run worker:deploy   # Deploy Worker to Cloudflare
 
 ---
 
-## Worker Development
+## Contact Backend (Lambda)
 
-The contact form backend runs on Cloudflare Workers. Here's how to develop and test it locally:
+The contact form is handled by the `portfolio-contact-ingest` Lambda. Its source lives in `backend/`.
 
-### Setup
-
-1. **Navigate to worker directory:**
-   ```bash
-   cd worker
-   ```
-
-2. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-
-3. **Configure local environment:**
-   ```bash
-   # Copy example file
-   cp .dev.vars.example .dev.vars
-   
-   # Edit .dev.vars with your Turnstile secret key
-   # Get key from: https://dash.cloudflare.com/?to=/:account/turnstile
-   ```
-
-4. **Start local Worker:**
-   ```bash
-   npm run dev
-   # Or from project root:
-   npm run worker:dev
-   ```
-
-   Worker will be available at `http://localhost:8787`
-
-### Testing the Worker
+### Working on the Lambda
 
 ```bash
-# Test contact form endpoint
-curl -X POST http://localhost:8787/api/contact \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "Test User",
-    "email": "test@example.com",
-    "message": "This is a test message",
-    "turnstileToken": "test-token"
-  }'
+cd backend
+
+npm test          # Run the Vitest suite (handler, email, validation, ip, secrets)
+npm run typecheck # Type check Lambda code (tsc --noEmit)
+npm run build     # Bundle the ingest handler via esbuild → dist/ingest/index.mjs
 ```
 
-### Worker Scripts
+### Handler pipeline
 
-```bash
-# From worker/ directory
-npm run dev        # Start local dev server
-npm run deploy     # Deploy to Cloudflare
-npm run typecheck  # Type check Worker code
-```
+1. Parse the JSON body
+2. Honeypot check - silently reject if the hidden `website` field is filled
+3. Time-trap - reject submissions completed faster than the minimum form-fill time
+4. Field validation - email, name, and message
+5. Send one email via Amazon SES, with `Reply-To` set to the submitter's email
 
-### Production Secrets
+The recipient address is read at runtime from AWS Secrets Manager (via `CONTACT_EMAIL_SECRET_ARN`)
+and is never hardcoded. CAPTCHA and rate limiting are enforced by AWS WAF at the CloudFront edge,
+so there is no token check or per-IP counter inside the handler.
 
-For production, set secrets via Wrangler CLI:
-
-```bash
-cd worker
-wrangler secret put TURNSTILE_SECRET_KEY
-wrangler secret put CONTACT_EMAIL
-```
-
-Or use Terraform (recommended) - see [Deployment](#deployment) section.
+> **Important:** Always build the Lambda bundle (`cd backend && npm run build`) before running
+> `tofu apply` — the OpenTofu archive references `backend/dist`.
 
 ---
 
 ## Deployment
 
-### Frontend Deployment (Cloudflare Pages)
+Deployment runs through **GitHub Actions with OIDC** — there are no long-lived AWS keys.
+`.github/workflows/deploy.yml` defines a **dev** job and a **prod** job; the GitHub Environments
+`dev` and `production` gate the OIDC subjects.
 
-**Automatic Deployment:**
-- Push to `main` branch triggers automatic build and deployment
-- Cloudflare Pages detects the push
-- Runs `npm run build`
-- Deploys to production
-- Custom domain (`trystan-tbm.dev`) automatically configured
+Each job:
 
-**Manual Deployment:**
-```bash
-# Build locally
-npm run build
+1. Builds the Lambda bundle (`cd backend && npm run build`)
+2. Runs `tofu apply` with the per-env backend config (`-backend-config=backend-<env>.hcl`)
+3. Builds the frontend (`npm run build`)
+4. Syncs the static assets to the infra-owned S3 bucket
+5. Invalidates the infra-owned CloudFront distribution
 
-# Deploy via Wrangler (if configured)
-wrangler pages deploy dist
-```
+### Infrastructure (OpenTofu)
 
-### Worker Deployment
-
-**Option 1: Via Terraform (Recommended)**
-```bash
-# Build Worker first
-cd worker
-npm run build
-cd ..
-
-# Deploy via Terraform
-cd terraform
-terraform apply
-```
-
-**Option 2: Via Wrangler CLI**
-```bash
-cd worker
-npm run deploy
-```
-
-### Infrastructure Deployment
+> **OpenTofu binary:** `tofu` is a user-local install (`~/.local/bin`), not on the system PATH.
+> Run `export PATH="$HOME/.local/bin:$PATH"` first.
 
 See detailed instructions in [`terraform/README.md`](./terraform/README.md).
 
 **Quick Start:**
 ```bash
-# 1. Configure Terraform variables
+# 1. Configure variables
 cd terraform
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your credentials
+# Edit terraform.tfvars (see Environment Variables)
 
-# 2. Build Worker
-cd ../worker
-npm install
-npm run build
+# 2. Build the Lambda bundle (the archive references backend/dist)
+cd ../backend && npm run build
 cd ../terraform
 
-# 3. Initialize and apply
-terraform init
-terraform plan  # Review changes
-terraform apply  # Deploy infrastructure
+# 3. Initialize, validate, and apply (dev shown; use backend-prod.hcl for prod)
+tofu init -reconfigure -backend-config=backend-dev.hcl
+tofu validate
+tofu apply -var environment=dev
 ```
 
-**What Terraform Creates:**
-- Cloudflare Pages project
-- Custom domain configuration
-- DNS records (root + www)
-- Worker script and route
-- Secret bindings for Worker
+**What OpenTofu manages:**
+- The ingest Lambda and its IAM role (SES send + secret read only)
+- The `AWS_IAM` Lambda Function URL
+- SES domain identity + DKIM
+- The contact-email secret in Secrets Manager
+- The SSM handshake and the CloudFront-OAC invoke permission
+- The SES DKIM CNAME records (the only remaining use of the `cloudflare` provider)
 
 ---
 
 ## Environment Variables
 
-### Frontend Environment Variables
+### Frontend (`.env`, build-time)
 
-Create `.env` in project root (optional for local development):
+Vite embeds `VITE_*` variables statically at build time. Both values below are client-side and are
+published by the infrastructure repo to SSM (`/portfolio/<env>/waf-integration-url` and
+`/portfolio/<env>/waf-api-key`):
 
 ```bash
-# Example .env (if needed)
-VITE_TURNSTILE_SITE_KEY=your-site-key-here
+VITE_WAF_INTEGRATION_URL=https://<waf-integration-host>/...
+VITE_WAF_API_KEY=<waf-api-key>
 ```
 
-**Note:** Turnstile site key can also be hardcoded in frontend (it's public).
+### Lambda
 
-### Worker Environment Variables
+Set on the function by OpenTofu:
 
-**Local Development** (`.dev.vars`):
-```bash
-TURNSTILE_SECRET_KEY=your-secret-key-here
-CONTACT_EMAIL=your-email@example.com  # Optional for local dev
-```
+- `FROM_EMAIL` - the verified SES sender address
+- `CONTACT_EMAIL_SECRET_ARN` - ARN of the Secrets Manager secret holding the recipient address
 
-**Production** (set via Terraform or Wrangler):
-- `TURNSTILE_SECRET_KEY` - Cloudflare Turnstile secret key
-- `CONTACT_EMAIL` - Email to receive contact form submissions
+The recipient address itself lives only in AWS Secrets Manager and is read at runtime.
 
-### Terraform Variables
+### OpenTofu (`terraform/terraform.tfvars`, gitignored)
 
-See [`terraform/variables.tf`](./terraform/variables.tf) for all variables.
-
-**Required Variables** (in `terraform/terraform.tfvars`):
 ```hcl
-cloudflare_api_token  = "your-api-token"
-cloudflare_account_id = "your-account-id"
-cloudflare_zone_id    = "your-zone-id"
-turnstile_site_key    = "your-site-key"
-turnstile_secret_key  = "your-secret-key"
-contact_email         = "your-email@example.com"
-github_repo_owner     = "trystan-tbm"
-github_repo_name      = "portfolio"
+environment          = "dev"   # "dev" or "prod" — drives SSM paths + per-env resources
+contact_email        = "..."   # recipient, stored in Secrets Manager
+cloudflare_api_token = "..."   # ONLY for the SES DKIM CNAMEs (DNS stays in the CF zone)
+cloudflare_zone_id   = "..."
+# domain_name defaults to trystan-tbm.dev
 ```
 
-### Where to Get Values
-
-| Variable | Source |
-|----------|--------|
-| `cloudflare_api_token` | [Cloudflare Dashboard](https://dash.cloudflare.com/profile/api-tokens) → Create Token |
-| `cloudflare_account_id` | Cloudflare Dashboard → Account dropdown → Right sidebar |
-| `cloudflare_zone_id` | Cloudflare Dashboard → Your Domain → API section |
-| `turnstile_site_key` | [Cloudflare Turnstile](https://dash.cloudflare.com/?to=/:account/turnstile) → Add Site |
-| `turnstile_secret_key` | Same as above (shown after creating site) |
-| `contact_email` | Your email address (for receiving form submissions) |
-
-**Security Note:** Never commit `.env`, `.dev.vars`, or `terraform.tfvars` to version control.
+**Security Note:** Never commit `.env` or `terraform.tfvars` to version control.
 
 ---
 
@@ -386,36 +311,38 @@ portfolio/
 │   │   ├── Experience.tsx   # Work highlights
 │   │   ├── Patents.tsx      # Innovation showcase
 │   │   ├── Skills.tsx       # Technical skills matrix
-│   │   ├── Projects.tsx     # Project portfolio
-│   │   ├── Contact.tsx      # Contact form
+│   │   ├── Projects.tsx     # Project portfolio (renders inline ArchitectureDiagram)
+│   │   ├── Contact.tsx      # Contact form (inline AWS WAF CAPTCHA widget)
 │   │   ├── Footer.tsx       # Site footer
 │   │   └── ThemeToggle.tsx  # Dark/light mode
 │   ├── App.tsx              # Main layout
 │   ├── main.tsx             # React entry point
 │   └── index.css            # Tailwind directives
 │
-├── worker/                  # Cloudflare Worker backend
+├── backend/                 # AWS Lambda contact backend
 │   ├── src/
-│   │   └── index.ts         # Contact form handler
-│   ├── package.json
-│   ├── wrangler.toml        # Worker configuration
-│   └── .dev.vars.example    # Local env template
+│   │   ├── ingest/
+│   │   │   ├── handler.ts   # honeypot, time-trap, validation, SES send
+│   │   │   ├── email.ts     # single-submission SES email sender
+│   │   │   └── ip.ts        # client IP extraction for the email body
+│   │   └── shared/
+│   │       ├── secrets.ts   # reads recipient from Secrets Manager
+│   │       ├── validation.ts# shared field validation
+│   │       └── types.ts     # ContactSubmission shape
+│   ├── test/                # Vitest suite
+│   └── package.json
 │
-├── terraform/               # Infrastructure as Code
-│   ├── main.tf              # Main infrastructure
-│   ├── variables.tf         # Variable definitions
-│   ├── outputs.tf           # Deployment outputs
+├── terraform/               # Infrastructure as Code (OpenTofu)
+│   ├── *.tf                 # Lambda, IAM, SES, SSM, permissions, etc.
+│   ├── backend-dev.hcl      # Per-env S3 state backend config (dev)
+│   ├── backend-prod.hcl     # Per-env S3 state backend config (prod)
 │   ├── terraform.tfvars.example  # Variables template
 │   └── README.md            # Deployment guide
 │
 ├── public/                  # Static assets
-│   └── vite.svg             # Favicon placeholder
 │
 ├── dist/                    # Production build output (gitignored)
 ├── node_modules/            # Dependencies (gitignored)
-│
-├── .claude/                 # Claude Code context
-│   └── context.md           # Project documentation
 │
 ├── package.json             # Frontend dependencies
 ├── vite.config.ts           # Vite configuration
@@ -423,6 +350,7 @@ portfolio/
 ├── tsconfig.json            # TypeScript configuration
 ├── postcss.config.js        # PostCSS configuration
 ├── eslint.config.js         # ESLint configuration
+├── lefthook.yml             # Pre-commit hooks
 └── README.md                # This file
 ```
 
@@ -470,17 +398,14 @@ Run Lighthouse audits (Chrome DevTools → Lighthouse) with these targets:
 
 #### 1. Code Splitting & Lazy Loading
 
-- **Mermaid.js Lazy Loading:** The `ArchitectureShowcase` component (which uses Mermaid.js) is lazy-loaded to reduce initial bundle size
-- **React.lazy():** Architecture diagrams only load when the section is viewed
-- **Manual Chunk Splitting:** Vite configured to split vendor chunks (React, Mermaid) for better caching
+- **Mermaid.js Lazy Loading:** Architecture diagrams use Mermaid.js, which is lazy-loaded so it
+  is only pulled in when a diagram is actually rendered, keeping the initial bundle small
+- **React.lazy():** Heavy, view-specific components load on demand
+- **Manual Chunk Splitting:** Vite is configured to split vendor chunks (React, Mermaid) for better caching
 
 ```tsx
-// ArchitectureShowcase is lazy-loaded
-const ArchitectureShowcase = lazy(() => 
-  import('./components/ArchitectureShowcase').then(module => ({ 
-    default: module.ArchitectureShowcase 
-  }))
-);
+// Mermaid is dynamically imported only when a diagram renders
+const mermaid = (await import('mermaid')).default;
 ```
 
 #### 2. Font Optimization
@@ -627,18 +552,20 @@ Before deploying, verify:
    - Contact form is the only way to reach out
    - LinkedIn/GitHub links are safe (they have their own spam protection)
 
-2. **Multi-Layer Spam Protection**
-   - **Cloudflare Turnstile** - Privacy-first CAPTCHA (no tracking cookies)
-   - **Honeypot Field** - Hidden input that bots fill (silent rejection)
-   - **Rate Limiting** - 3 submissions per hour per IP address
-   - **Time Validation** - Reject submissions completed in < 3 seconds
+2. **Multi-Layer Spam Protection (defense in depth)**
+   - **AWS WAF (edge)** - CAPTCHA + rate limiting at the CloudFront edge, before requests reach
+     the Lambda. The frontend renders an inline AWS WAF CAPTCHA widget via the WAF integration script.
+   - **Honeypot Field** - Hidden `website` input that bots fill (silent rejection)
+   - **Time-Trap** - Reject submissions completed faster than the minimum form-fill time
    - **Server-Side Validation** - Email format, message length, required fields
+   - **Amazon SES** - Outbound email delivery with `Reply-To` set to the submitter
 
 3. **Secrets Management**
-   - All secrets stored as environment variables
-   - Terraform manages Worker secrets via `secret_text_binding`
-   - `.env`, `.dev.vars`, and `terraform.tfvars` are gitignored
-   - API tokens use least-privilege permissions
+   - The contact recipient address lives in **AWS Secrets Manager**, read at runtime by the Lambda
+   - Frontend config (`VITE_*`) is build-time only; the Lambda uses `FROM_EMAIL` +
+     `CONTACT_EMAIL_SECRET_ARN`
+   - `.env` and `terraform.tfvars` are gitignored
+   - IAM roles use least-privilege permissions (the ingest role can only send via SES and read its secret)
 
 4. **Dependency Security**
    - Dependabot configured for automatic dependency updates
@@ -648,12 +575,12 @@ Before deploying, verify:
 ### Security Checklist
 
 - ✅ No email/phone in codebase
-- ✅ All secrets in environment variables
+- ✅ Recipient address in AWS Secrets Manager
 - ✅ `.gitignore` excludes sensitive files
-- ✅ API tokens with minimal required permissions
-- ✅ Worker secrets encrypted by Cloudflare
-- ✅ Rate limiting prevents abuse
+- ✅ IAM roles with minimal required permissions
+- ✅ AWS WAF CAPTCHA + rate limiting at the edge
 - ✅ Input validation on both client and server
+- ✅ No long-lived AWS keys (GitHub Actions OIDC)
 
 ---
 
@@ -710,4 +637,4 @@ If you use this as a template, please:
 
 ---
 
-**Built with ❤️ using Vite, React, TypeScript, Tailwind CSS, and Cloudflare Workers.**
+**Built with ❤️ using Vite, React, TypeScript, Tailwind CSS, and AWS (Lambda, S3, CloudFront, SES).**

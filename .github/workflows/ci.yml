@@ -73,10 +73,10 @@ jobs:
         run: npm test
 
   # =============================================================================
-  # SECURITY AUDIT JOB - npm audit across all three workspaces
+  # SECURITY AUDIT JOB - npm audit across both workspaces (frontend + backend)
   # Starts NON-BLOCKING (|| true) to avoid breaking CI on pre-existing dev-tool
-  # noise. TODO: remove the "|| true" and tighten to a hard gate now that all
-  # three workspaces are confirmed clean (Plan S Tasks 1-4) and stay green.
+  # noise. TODO: remove the "|| true" and tighten to a hard gate now that both
+  # workspaces are confirmed clean and stay green.
   # =============================================================================
   security-audit:
     name: Security Audit
@@ -94,16 +94,12 @@ jobs:
       - name: Audit root (frontend)
         run: npm audit --audit-level=high || true
 
-      - name: Audit worker
-        working-directory: worker
-        run: npm audit --audit-level=high || true
-
       - name: Audit backend
         working-directory: backend
         run: npm audit --audit-level=high || true
 
   # =============================================================================
-  # BUILD JOB - Build frontend and worker, upload artifacts for reuse
+  # BUILD JOB - Build the frontend, upload the artifact for reuse
   # =============================================================================
   build:
     name: Build
@@ -118,27 +114,12 @@ jobs:
           node-version: '20'
           cache: 'npm'
 
-      # Build frontend
       - name: Install frontend dependencies
         run: npm ci
 
       - name: Build frontend
         run: npm run build
 
-      # Build worker
-      - name: Install worker dependencies
-        working-directory: worker
-        run: npm ci
-
-      - name: Worker type check
-        working-directory: worker
-        run: npm run typecheck
-
-      - name: Build worker
-        working-directory: worker
-        run: npm run build
-
-      # Upload artifacts for downstream jobs
       - name: Upload frontend build
         uses: actions/upload-artifact@v4
         with:
@@ -146,15 +127,8 @@ jobs:
           path: dist/
           retention-days: 1
 
-      - name: Upload worker build
-        uses: actions/upload-artifact@v4
-        with:
-          name: worker-dist
-          path: worker/dist/
-          retention-days: 1
-
   # =============================================================================
-  # TERRAFORM VALIDATION - Downloads worker artifact, validates without backend
+  # TERRAFORM VALIDATION - validates the AWS config without a backend
   # =============================================================================
   terraform:
     name: Terraform Validate
@@ -163,13 +137,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      # Download worker artifact (needed for terraform validate)
-      - name: Download worker build
-        uses: actions/download-artifact@v4
-        with:
-          name: worker-dist
-          path: worker/dist/
 
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@v1

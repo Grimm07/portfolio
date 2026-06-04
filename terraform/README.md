@@ -1,502 +1,405 @@
-# Terraform Deployment Guide
+# Contact Backend Infrastructure (OpenTofu / AWS)
 
-This guide walks you through deploying the portfolio infrastructure to Cloudflare using Terraform.
+This directory is the **OpenTofu** configuration for the portfolio's **contact backend** on AWS
+(region `us-east-1`). It manages the ingest Lambda, its IAM role, SES sending identity, the
+recipient secret, and the SSM handshake that wires the function into the edge.
+
+> Tooling note: this project uses **OpenTofu** (`tofu`), **not** the `terraform` CLI. Every command
+> below is `tofu ...`. See [Prerequisites](#prerequisites) for the user-local install path.
 
 ## Table of Contents
 
-1. [Prerequisites](#prerequisites)
-2. [Getting Cloudflare Credentials](#getting-cloudflare-credentials)
-3. [Setup Steps](#setup-steps)
-4. [Deployment Workflow](#deployment-workflow)
-5. [Troubleshooting](#troubleshooting)
-6. [Security Notes](#security-notes)
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [The SSM Handshake](#the-ssm-handshake)
+4. [State Backend (per-env, per-account)](#state-backend-per-env-per-account)
+5. [Setup](#setup)
+6. [Build + Apply Workflow](#build--apply-workflow)
+7. [Outputs](#outputs)
+8. [Troubleshooting](#troubleshooting)
+9. [Security Notes](#security-notes)
+10. [Quick Reference](#quick-reference)
+
+---
+
+## Overview
+
+### What this configuration manages
+
+| Resource | File | Notes |
+|----------|------|-------|
+| Ingest Lambda `portfolio-contact-ingest` + `AWS_IAM` Function URL | `lambda.tf` | Bundle is `backend/dist/ingest/index.mjs`, zipped via `archive_file` |
+| Lambda IAM role + least-privilege policy | `iam.tf` | `ses:SendEmail`/`ses:SendRawEmail` (scoped by a `ses:FromAddress` condition), `secretsmanager:GetSecretValue`, plus basic Lambda logging |
+| SES domain identity + DKIM | `ses.tf` | DKIM CNAMEs are created in the **Cloudflare DNS zone** — the only remaining Cloudflare use |
+| SES recipient email identity | `ses.tf` | Triggers a one-time verification email to `contact_email` (manual click) |
+| Contact-email secret `portfolio-contact-contact-email` | `secrets.tf` | Holds the recipient address; read by the Lambda at runtime |
+| SSM publish: function URL + ARN | `ssm.tf` | `/portfolio/<env>/ingest-function-url`, `/portfolio/<env>/ingest-function-arn` |
+| CloudFront-OAC invoke permission | `permissions.tf` | Reads `/portfolio/<env>/cloudfront-distribution-arn` from SSM and grants `lambda:InvokeFunctionUrl` to `cloudfront.amazonaws.com`, scoped to that distribution |
+
+### What this configuration does NOT manage
+
+The edge/hosting layer is owned by the separate **shadowspire** infrastructure repo (the landing
+zone), not here. Do **not** create these in this directory:
+
+- The S3 site bucket
+- The CloudFront distribution
+- The ACM certificate
+- The AWS WAF web ACL
+
+This config and the infra repo communicate exclusively through SSM Parameter Store (see
+[The SSM Handshake](#the-ssm-handshake)).
 
 ---
 
 ## Prerequisites
 
-Before you begin, ensure you have the following:
+### OpenTofu (`tofu`) — user-local install
 
-### Required Software
+The `tofu` binary is installed under `~/.local/bin` and is **not** on the system `PATH`. Export it
+at the start of every shell session before running any command in this guide:
 
-- **Terraform** (>= 1.0)
-  - Download from [terraform.io/downloads](https://www.terraform.io/downloads)
-  - Verify installation: `terraform version`
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+tofu version   # confirm it resolves
+```
 
-- **Node.js** (18+ or 20+)
-  - Required for building the Worker
-  - Verify installation: `node --version`
+Required version: `>= 1.0` (see `main.tf`).
 
-- **npm** (comes with Node.js)
-  - Verify installation: `npm --version`
+### AWS credentials (per account)
 
-### Required Accounts & Resources
+`dev` and `prod` live in **separate AWS accounts**, so you authenticate to whichever account you are
+deploying to (typically via AWS SSO or a named profile):
 
-- **Cloudflare Account**
-  - Sign up at [cloudflare.com](https://www.cloudflare.com) (free tier works)
-  - Domain must be registered and managed in Cloudflare
+| Env | Account ID |
+|-----|------------|
+| dev | `176355979099` |
+| prod | `681053994223` |
 
-- **Domain Registered in Cloudflare**
-  - Domain: `trystan-tbm.dev` (or your custom domain)
-  - DNS must be managed by Cloudflare (nameservers pointing to Cloudflare)
+Example:
 
-- **GitHub Repository**
-  - Repository must exist and be accessible
-  - Repository owner and name will be used in Terraform variables
+```bash
+aws sso login --profile portfolio-dev      # or portfolio-prod
+export AWS_PROFILE=portfolio-dev
+aws sts get-caller-identity                 # confirm the account matches the env you intend
+```
+
+All resources are created in `us-east-1`.
+
+### Node.js (for the Lambda build)
+
+The Lambda bundle is produced by the `backend/` build before each apply. Node 18+ or 20+ is required
+(the Lambda runtime is `nodejs20.x`). See [Build + Apply Workflow](#build--apply-workflow).
 
 ---
 
-## Getting Cloudflare Credentials
+## The SSM Handshake
 
-### 1. Create Cloudflare API Token
+This repo and the infra (shadowspire) repo hand off through SSM parameters under
+`/portfolio/<env>/`. Understanding this is the key to applying in the right order.
 
-1. Log in to [Cloudflare Dashboard](https://dash.cloudflare.com)
-2. Go to **My Profile** → **API Tokens**
-3. Click **Create Token**
-4. Use **Edit Cloudflare Workers** template, or create custom token with these permissions:
-   - **Account** → **Cloudflare Pages** → **Edit**
-   - **Account** → **Workers Scripts** → **Edit**
-   - **Zone** → **Zone** → **Read**
-   - **Zone** → **DNS** → **Edit**
-   - **Zone** → **Workers Routes** → **Edit**
-5. Set **Account Resources** to your account
-6. Set **Zone Resources** to your domain (`trystan-tbm.dev`)
-7. Click **Continue to summary** → **Create Token**
-8. **Copy the token immediately** (you won't see it again)
+**This repo PUBLISHES (other repo reads):**
 
-### 2. Find Account ID
+- `/portfolio/<env>/ingest-function-url` — the Lambda Function URL
+- `/portfolio/<env>/ingest-function-arn` — the Lambda ARN
 
-1. In Cloudflare Dashboard, select your account from the top-right dropdown
-2. The Account ID is displayed in the right sidebar
-3. Copy the Account ID (format: 32-character hex string)
+**This repo READS (published by the infra repo):**
 
-### 3. Find Zone ID
+- `/portfolio/<env>/cloudfront-distribution-arn` — used by `permissions.tf` to scope the OAC grant
+- `/portfolio/<env>/waf-integration-url` — consumed by the frontend build (`VITE_WAF_INTEGRATION_URL`)
+- `/portfolio/<env>/waf-api-key` — consumed by the frontend/edge
 
-1. In Cloudflare Dashboard, select your domain (`trystan-tbm.dev`)
-2. Scroll down to the **API** section in the right sidebar
-3. Copy the **Zone ID** (format: 32-character hex string)
+### Dependency order
 
-### 4. Create Turnstile Site (Free Tier)
-
-1. In Cloudflare Dashboard, go to **Security** → **Turnstile**
-2. Click **Add Site**
-3. Configure:
-   - **Site name**: `Portfolio Contact Form`
-   - **Domain**: `trystan-tbm.dev` (or `*.trystan-tbm.dev` for all subdomains)
-   - **Widget mode**: `Managed` (recommended) or `Non-interactive`
-4. Click **Create**
-5. Copy both:
-   - **Site Key** (public, used in frontend)
-   - **Secret Key** (private, used in Worker)
+1. **This repo applies first.** It creates the Lambda + Function URL and publishes
+   `ingest-function-url` / `ingest-function-arn`. On a brand-new env, `permissions.tf` will fail at
+   this point because `cloudfront-distribution-arn` does not exist yet — that is expected (see
+   [Troubleshooting](#troubleshooting)).
+2. **The infra repo applies next.** It wires CloudFront's `/api/*` origin to the Function URL and
+   publishes `cloudfront-distribution-arn`.
+3. **This repo applies again.** Now `permissions.tf` finds the distribution ARN and grants
+   CloudFront's OAC permission to invoke the Function URL.
 
 ---
 
-## Setup Steps
+## State Backend (per-env, per-account)
 
-### Step 1: Configure Terraform Variables
+The S3 backend is **partial** (`backend.tf`): the bucket and lock table are supplied per-env at init
+time, because each env's deploy role can only reach its own account's state bucket.
 
-1. Copy the example variables file:
-   ```bash
-   cd terraform
-   cp terraform.tfvars.example terraform.tfvars
-   ```
+| Env | State bucket | Lock table | Backend config |
+|-----|--------------|------------|----------------|
+| dev | `shadowspire-dev-state-176355979099` | `shadowspire-dev-tf-lock` | `backend-dev.hcl` |
+| prod | `shadowspire-prod-state-681053994223` | `shadowspire-prod-tf-lock` | `backend-prod.hcl` |
 
-2. Edit `terraform.tfvars` with your actual values:
-   ```hcl
-   # Cloudflare API Configuration
-   cloudflare_api_token  = "your-actual-api-token-here"
-   cloudflare_account_id = "your-32-char-account-id"
-   cloudflare_zone_id    = "your-32-char-zone-id"
+State key (both envs): `portfolio/terraform.tfstate`. Region: `us-east-1`. Encryption is enabled.
 
-   # Turnstile CAPTCHA Configuration
-   turnstile_site_key    = "your-turnstile-site-key"
-   turnstile_secret_key  = "your-turnstile-secret-key"
-
-   # Contact Form Configuration
-   contact_email         = "your-email@example.com"
-
-   # GitHub Repository Configuration
-   github_repo_owner = "trystan-tbm"
-   github_repo_name  = "portfolio"
-
-   # Domain Configuration (optional, defaults to trystan-tbm.dev)
-   # domain_name = "trystan-tbm.dev"
-   ```
-
-3. **Important**: Never commit `terraform.tfvars` to version control (it's in `.gitignore`)
-
-### Step 2: Build the Worker
-
-The Worker must be built before Terraform can deploy it:
+Select the backend at init:
 
 ```bash
-# From project root
-cd worker
-npm install
-npm run build
-cd ..
+tofu init -reconfigure -backend-config=backend-dev.hcl    # or backend-prod.hcl
 ```
 
-This creates `worker/dist/index.js` which Terraform will read.
-
-### Step 3: Initialize Terraform
-
-From the `terraform/` directory:
-
-```bash
-cd terraform
-terraform init
-```
-
-This downloads the Cloudflare provider and initializes the backend.
-
-### Step 4: Review Terraform Plan
-
-Preview what Terraform will create:
-
-```bash
-terraform plan
-```
-
-Review the output carefully. You should see:
-- `cloudflare_pages_project.portfolio` (will be created)
-- `cloudflare_pages_domain.portfolio` (will be created)
-- `cloudflare_record.pages_root` (will be created)
-- `cloudflare_record.pages_www` (will be created)
-- `cloudflare_worker_script.contact_form` (will be created)
-- `cloudflare_worker_route.contact_form` (will be created)
-
-### Step 5: Apply Terraform Configuration
-
-Deploy the infrastructure:
-
-```bash
-terraform apply
-```
-
-Terraform will prompt you to confirm. Type `yes` to proceed.
-
-**Expected output:**
-- Pages project created
-- Custom domain attached
-- DNS records created
-- Worker deployed
-- Worker route configured
-
-### Step 6: Verify Deployment
-
-After successful deployment, Terraform will output URLs:
-
-- `pages_url`: Cloudflare Pages canonical URL
-- `custom_domain_url`: Your custom domain URL
-- `www_domain_url`: WWW subdomain URL
-- `worker_url`: Worker endpoint URL
-- `turnstile_site_key`: Site key for frontend
-
-Visit your custom domain URL to verify the site is live.
+> Always re-init with `-reconfigure` when switching environments so you don't accidentally apply
+> `dev` changes against `prod` state (or vice versa). The env you `init` must match the
+> `-var environment=` you `apply`.
 
 ---
 
-## Deployment Workflow
+## Setup
 
-### Frontend Changes (React/TypeScript)
+Create `terraform.tfvars` from the example (it is **gitignored** — it contains the recipient
+address and the Cloudflare token):
 
-**Automatic deployment via Cloudflare Pages:**
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+cp terraform.tfvars.example terraform.tfvars
+```
 
-1. Make changes to frontend code
-2. Commit and push to `main` branch:
-   ```bash
-   git add .
-   git commit -m "Update portfolio"
-   git push origin main
-   ```
-3. Cloudflare Pages automatically:
-   - Detects the push
-   - Builds the project (`npm run build`)
-   - Deploys to production
-4. Monitor deployment in Cloudflare Dashboard → **Pages** → **trystan-portfolio**
+Fill in the required inputs:
 
-**No Terraform changes needed** for frontend-only updates.
+```hcl
+# Selects which env's SSM paths/resources this apply targets. Must be "dev" or "prod".
+environment = "dev"
 
-### Worker Changes (Contact Form Backend)
+# Recipient address for contact emails (stored in Secrets Manager, never in plaintext code).
+contact_email = "your-email@example.com"
 
-**Manual deployment required:**
+# Cloudflare — required ONLY for the SES DKIM CNAMEs (DNS still lives in the Cloudflare zone).
+cloudflare_api_token = "..."
+cloudflare_zone_id   = "..."
 
-1. Make changes to `worker/src/index.ts`
-2. Build the Worker:
-   ```bash
-   cd worker
-   npm run build
-   cd ..
-   ```
-3. Apply Terraform to deploy updated Worker:
-   ```bash
-   cd terraform
-   terraform apply
-   ```
-4. Terraform will detect the changed `worker/dist/index.js` and update the Worker
+# domain_name defaults to trystan-tbm.dev; override only if needed.
+# domain_name = "trystan-tbm.dev"
+```
 
-### Infrastructure Changes (Terraform Configuration)
+| Variable | Required | Purpose |
+|----------|----------|---------|
+| `environment` | yes | `"dev"` or `"prod"` (validated); drives SSM paths and resource selection |
+| `contact_email` | yes | Recipient address, stored in Secrets Manager |
+| `cloudflare_api_token` | yes | DNS edit token for the SES DKIM CNAMEs only |
+| `cloudflare_zone_id` | yes | Zone for the DKIM CNAMEs |
+| `domain_name` | no | Defaults to `trystan-tbm.dev` |
+| `aws_region` | no | Defaults to `us-east-1` |
 
-**Update Terraform files and apply:**
+> The Cloudflare token needs only **Zone → DNS → Edit** on the `trystan-tbm.dev` zone — nothing
+> more. It exists solely to publish the three SES DKIM CNAME records.
 
-1. Edit Terraform files (`main.tf`, `variables.tf`, etc.)
-2. Review changes:
-   ```bash
-   cd terraform
-   terraform plan
-   ```
-3. Apply changes:
-   ```bash
-   terraform apply
-   ```
+---
 
-**Common infrastructure updates:**
-- Adding environment variables
-- Changing build configuration
-- Updating DNS records
-- Modifying Worker routes
+## Build + Apply Workflow
+
+### Critical: build the Lambda bundle first
+
+The `archive_file` data source in `lambda.tf` reads `backend/dist/ingest/index.mjs`. If that file
+does not exist, the apply fails. **Always build the bundle before `tofu apply`:**
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+cd backend && npm run build      # produces backend/dist/ingest/index.mjs
+cd ../terraform
+```
+
+### Canonical workflow (dev)
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+
+# 1. Build the Lambda bundle
+cd backend && npm run build && cd ../terraform
+
+# 2. Init the dev backend
+tofu init -reconfigure -backend-config=backend-dev.hcl
+
+# 3. Validate config
+tofu validate
+
+# 4. Plan / apply against dev (must match the backend you init'd)
+tofu plan  -var environment=dev
+tofu apply -var environment=dev
+```
+
+### Promoting to prod
+
+Re-init against the prod backend and apply with `environment=prod`. Make sure your AWS credentials
+point at the **prod account** (`681053994223`):
+
+```bash
+export AWS_PROFILE=portfolio-prod
+aws sts get-caller-identity                          # confirm 681053994223
+
+cd backend && npm run build && cd ../terraform
+tofu init -reconfigure -backend-config=backend-prod.hcl
+tofu validate
+tofu apply -var environment=prod
+```
+
+### Validate-only (no AWS credentials)
+
+To syntax/type-check the configuration without touching a backend or AWS:
+
+```bash
+tofu init -backend=false
+tofu validate
+```
+
+### CI vs. local applies
+
+In normal operation, deploys run through **GitHub Actions with OIDC**
+(`.github/workflows/deploy.yml`): the workflow builds the Lambda bundle and runs `tofu apply` for the
+target env (using the matching per-env backend config) before syncing the site. There are no
+long-lived AWS keys.
+
+Local applies are reserved for **break-glass / first-time setup** — e.g. bootstrapping a new env, or
+the initial two-phase handshake with the infra repo.
+
+---
+
+## Outputs
+
+After a successful apply (`tofu output`):
+
+| Output | Description |
+|--------|-------------|
+| `ingest_function_url` | The IAM-auth Lambda Function URL (fronted by CloudFront OAC) |
+| `ingest_function_name` | The Lambda function name (`portfolio-contact-ingest`), handy for `aws lambda invoke` |
+| `ingest_function_url_ssm_param` | SSM param name where the Function URL is published |
+| `ingest_function_arn_ssm_param` | SSM param name where the Lambda ARN is published |
+
+> The Function URL is `AWS_IAM`-authorized — calling it directly without a SigV4 signature returns
+> `403`. Only CloudFront's OAC (granted in `permissions.tf`) can invoke it.
 
 ---
 
 ## Troubleshooting
 
-### Common Errors and Solutions
+### `archive_file` can't find `backend/dist/ingest/index.mjs`
 
-#### Error: "Failed to read file: worker/dist/index.js"
+The Lambda bundle hasn't been built. Run the build, then apply:
 
-**Problem:** Worker hasn't been built yet.
-
-**Solution:**
 ```bash
-cd worker
-npm run build
-cd ../terraform
-terraform apply
+cd backend && npm run build
+cd ../terraform && tofu apply -var environment=dev
 ```
 
-#### Error: "Invalid API token"
+### `permissions.tf` / data source error: SSM parameter not found
 
-**Problem:** API token is incorrect or doesn't have required permissions.
+`data.aws_ssm_parameter.cf_arn` reads `/portfolio/<env>/cloudfront-distribution-arn`, which is
+published by the **infra repo**. If it's missing:
 
-**Solution:**
-1. Verify token in Cloudflare Dashboard → **My Profile** → **API Tokens**
-2. Check token has all required permissions (see [Getting Cloudflare Credentials](#getting-cloudflare-credentials))
-3. Regenerate token if needed
+- On a brand-new env, this is expected on the **first** apply — the infra repo hasn't wired
+  CloudFront yet. Complete the infra repo's phase, then re-apply here (see
+  [The SSM Handshake](#the-ssm-handshake)).
+- If the infra phase is supposedly done, confirm the parameter exists and you're in the right
+  account/region:
+  ```bash
+  aws ssm get-parameter --name /portfolio/dev/cloudfront-distribution-arn --region us-east-1
+  ```
 
-#### Error: "Zone not found" or "Invalid zone ID"
+### Wrong account or wrong backend
 
-**Problem:** Zone ID is incorrect or domain isn't in Cloudflare.
+Symptoms: `AccessDenied` on the state bucket, an unexpected plan (resources you didn't change show as
+create/destroy), or state that doesn't match the env.
 
-**Solution:**
-1. Verify domain is registered in Cloudflare
-2. Check Zone ID in Cloudflare Dashboard → Your Domain → **API** section
-3. Ensure nameservers point to Cloudflare
+- Confirm credentials match the env's account:
+  ```bash
+  aws sts get-caller-identity   # dev=176355979099, prod=681053994223
+  ```
+- Re-init the correct backend with `-reconfigure`:
+  ```bash
+  tofu init -reconfigure -backend-config=backend-dev.hcl    # or backend-prod.hcl
+  ```
+- Ensure `-var environment=` matches the backend you init'd.
 
-#### Error: "Pages project already exists"
+### `environment must be "dev" or "prod"`
 
-**Problem:** Project with same name already exists in Cloudflare.
+The `environment` variable is validated. Set it in `terraform.tfvars` or pass
+`-var environment=dev` / `-var environment=prod`.
 
-**Solution:**
-1. Either delete existing project in Cloudflare Dashboard
-2. Or change project name in `terraform/main.tf`:
-   ```hcl
-   resource "cloudflare_pages_project" "portfolio" {
-     name = "trystan-portfolio-v2"  # Change name
-     # ...
-   }
-   ```
+### SES verification / DKIM not active
 
-#### Error: "DNS record already exists"
+- The recipient identity (`aws_ses_email_identity.recipient`) sends a one-time confirmation email to
+  `contact_email`. Click the link in that email or SES will refuse to send to it.
+- DKIM CNAMEs are created in the Cloudflare zone; propagation can take a few minutes. Check status:
+  ```bash
+  aws ses get-identity-dkim-attributes --identities trystan-tbm.dev --region us-east-1
+  ```
 
-**Problem:** CNAME records for `@` or `www` already exist.
-
-**Solution:**
-1. Check existing DNS records in Cloudflare Dashboard
-2. Either delete conflicting records manually
-3. Or import existing records into Terraform state:
-   ```bash
-   terraform import cloudflare_record.pages_root <zone_id>/<record_id>
-   ```
-
-#### Worker Not Responding
-
-**Problem:** Worker returns errors or doesn't execute.
-
-**Solution:**
-1. Check Worker logs in Cloudflare Dashboard → **Workers & Pages** → **portfolio-contact-worker** → **Logs**
-2. Verify secret bindings are set correctly:
-   ```bash
-   terraform show | grep secret_text_binding
-   ```
-3. Test Worker directly:
-   ```bash
-   curl https://trystan-tbm.dev/api/contact
-   ```
-
-### Destroying Resources
-
-To completely remove all infrastructure:
+### Inspecting state
 
 ```bash
-cd terraform
-terraform destroy
-```
-
-**Warning:** This will delete:
-- Pages project and deployments
-- Custom domain configuration
-- DNS records
-- Worker script and routes
-
-**Note:** This does NOT delete your domain from Cloudflare, only the resources created by Terraform.
-
-### Checking Deployment Status
-
-#### Pages Deployment Status
-
-1. Cloudflare Dashboard → **Workers & Pages** → **Pages**
-2. Select **trystan-portfolio**
-3. View deployment history and status
-
-#### Worker Status
-
-1. Cloudflare Dashboard → **Workers & Pages** → **Workers**
-2. Select **portfolio-contact-worker**
-3. View metrics, logs, and invocations
-
-#### DNS Records
-
-1. Cloudflare Dashboard → Your Domain → **DNS**
-2. Verify CNAME records exist:
-   - `@` → `trystan-portfolio.pages.dev` (proxied)
-   - `www` → `trystan-portfolio.pages.dev` (proxied)
-
-### Viewing Terraform State
-
-List all managed resources:
-
-```bash
-cd terraform
-terraform state list
-```
-
-Show details of a specific resource:
-
-```bash
-terraform state show cloudflare_pages_project.portfolio
+tofu state list
+tofu state show aws_lambda_function.ingest
 ```
 
 ---
 
 ## Security Notes
 
-### Never Commit Sensitive Files
-
-**Critical:** The following files contain secrets and are in `.gitignore`:
-
-- `terraform.tfvars` - Contains API tokens, secret keys, email addresses
-- `terraform/*.tfstate` - May contain sensitive data
-- `terraform/*.tfstate.*` - Backup state files
-- `terraform/.terraform/` - Provider cache
-
-**Always verify these are excluded:**
-```bash
-git status
-# terraform.tfvars should NOT appear in untracked files
-```
-
-### API Token Security
-
-1. **Rotate tokens periodically** (every 90 days recommended)
-2. **Use least-privilege permissions** (only grant what's needed)
-3. **Never share tokens** in chat, email, or documentation
-4. **Revoke unused tokens** in Cloudflare Dashboard
-
-### Secret Management
-
-- **Turnstile Secret Key**: Only used in Worker (server-side)
-- **Contact Email**: Only used in Worker (server-side)
-- **API Token**: Only used by Terraform (local machine)
-
-All secrets are stored as `secret_text_binding` in the Worker, which is encrypted by Cloudflare.
-
-### Monitoring
-
-**Regular checks:**
-
-1. **Worker Invocations**
-   - Cloudflare Dashboard → **Workers & Pages** → **portfolio-contact-worker** → **Metrics**
-   - Monitor for unusual spikes (potential abuse)
-
-2. **API Token Usage**
-   - Cloudflare Dashboard → **My Profile** → **API Tokens**
-   - Review last used date
-
-3. **DNS Records**
-   - Verify CNAME records haven't been modified
-   - Check for unauthorized changes
-
-### Best Practices
-
-1. **Use separate API tokens** for different environments (dev/staging/prod)
-2. **Review Terraform plan** before every apply
-3. **Keep Terraform state** in version control (if using remote backend) or secure location
-4. **Document changes** in commit messages
-5. **Test Worker locally** before deploying:
-   ```bash
-   cd worker
-   npm run dev
-   ```
-
----
-
-## Additional Resources
-
-- [Terraform Cloudflare Provider Documentation](https://registry.terraform.io/providers/cloudflare/cloudflare/latest/docs)
-- [Cloudflare Pages Documentation](https://developers.cloudflare.com/pages/)
-- [Cloudflare Workers Documentation](https://developers.cloudflare.com/workers/)
-- [Cloudflare Turnstile Documentation](https://developers.cloudflare.com/turnstile/)
+- **No plaintext PII in code.** No email addresses or phone numbers are hardcoded anywhere in this
+  configuration. The recipient address lives in **AWS Secrets Manager**
+  (`portfolio-contact-contact-email`) and is read by the Lambda at runtime; the sender is derived as
+  `noreply@<domain_name>`.
+- **`terraform.tfvars` is gitignored.** It contains `contact_email` and the Cloudflare token — never
+  commit it. Verify with `git status` before committing.
+- **State may contain sensitive values.** It lives encrypted in the per-env S3 backend, scoped to
+  each account. Don't copy `*.tfstate` locally or into git.
+- **Least-privilege IAM.** The Lambda role can only send SES email from the verified `from_email`
+  (enforced by a `ses:FromAddress` condition), read the one contact-email secret, and write its own
+  logs.
+- **IAM-locked Function URL.** Direct public calls return `403`; only CloudFront's OAC can invoke it.
+- **No long-lived AWS keys in CI.** Deploys use GitHub Actions OIDC.
 
 ---
 
 ## Quick Reference
 
-### Essential Commands
-
 ```bash
-# Build Worker
-cd worker && npm run build && cd ..
+# Always first: put tofu on PATH (user-local install)
+export PATH="$HOME/.local/bin:$PATH"
 
-# Initialize Terraform
-cd terraform && terraform init
+# Build the Lambda bundle (REQUIRED before apply)
+cd backend && npm run build && cd ../terraform
 
-# Plan changes
-terraform plan
+# Init the per-env backend (dev shown; use backend-prod.hcl for prod)
+tofu init -reconfigure -backend-config=backend-dev.hcl
 
-# Apply changes
-terraform apply
+# Validate
+tofu validate
 
-# Destroy everything
-terraform destroy
+# Plan / apply (env must match the backend you init'd)
+tofu plan  -var environment=dev
+tofu apply -var environment=dev
 
-# View outputs
-terraform output
+# Validate only, no AWS creds
+tofu init -backend=false && tofu validate
+
+# Outputs / state
+tofu output
+tofu state list
 ```
 
-### File Structure
+### File structure
 
 ```
 terraform/
-├── main.tf                    # Main infrastructure configuration
-├── variables.tf               # Variable definitions
-├── outputs.tf                 # Output values
-├── terraform.tfvars          # Your actual values (NOT in git)
-├── terraform.tfvars.example  # Template file
-├── .gitignore                # Excludes sensitive files
-└── README.md                 # This file
+├── main.tf                   # required_providers (cloudflare/aws/archive) + cloudflare provider
+├── providers_aws.tf          # aws provider, default tags, locals (name_prefix, from_email)
+├── variables.tf              # environment, contact_email, cloudflare_*, domain_name, aws_region
+├── outputs.tf                # ingest function url/name + SSM param names
+├── backend.tf                # partial S3 backend (bucket/lock supplied per-env at init)
+├── backend-dev.hcl           # dev account backend config
+├── backend-prod.hcl          # prod account backend config
+├── lambda.tf                 # ingest Lambda + AWS_IAM Function URL (archive from backend/dist)
+├── iam.tf                    # ingest role + least-privilege policy
+├── ses.tf                    # SES domain identity + DKIM (CNAMEs in Cloudflare zone) + recipient
+├── secrets.tf                # contact-email secret (recipient address)
+├── ssm.tf                    # publishes ingest-function-url / ingest-function-arn
+├── permissions.tf            # CloudFront OAC invoke grant (reads cloudfront-distribution-arn)
+├── terraform.tfvars          # your values (NOT in git)
+├── terraform.tfvars.example  # template
+└── README.md                 # this file
 ```
 
 ---
 
-**Last Updated:** 2025-01-XX
+**Last Updated:** 2026-06

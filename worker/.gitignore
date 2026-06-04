@@ -1,9 +1,0 @@
-# Wrangler build artifacts
-.wrangler/
-dist/
-
-# Local development secrets
-.dev.vars
-
-# Logs
-*.log
