@@ -1,3 +1,10 @@
+const builtWith = [
+  { name: 'Vite', href: 'https://vitejs.dev', logo: '/vite.svg' },
+  { name: 'React', href: 'https://react.dev', logo: '/react.svg' },
+  { name: 'TypeScript', href: 'https://www.typescriptlang.org', logo: '/typescript.svg' },
+  { name: 'AWS Lambda', href: 'https://aws.amazon.com/lambda/', logo: '/aws-lambda.svg' },
+];
+
 export function Footer() {
   return (
     <footer className="py-8 bg-bg-tertiary relative overflow-hidden">
@@ -10,48 +17,34 @@ export function Footer() {
         <p className="text-sm text-text-tertiary mb-2">
           © {new Date().getFullYear()} Trystan Bates-Maricle
         </p>
-        <p className="text-sm text-text-tertiary mb-4">
-          Built with{' '}
-          <a
-            href="https://vitejs.dev"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:text-primary-light transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
-            aria-label="Vite (opens in new tab)"
-          >
-            Vite
-          </a>
-          ,{' '}
-          <a
-            href="https://react.dev"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:text-primary-light transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
-            aria-label="React (opens in new tab)"
-          >
-            React
-          </a>
-          ,{' '}
-          <a
-            href="https://www.typescriptlang.org"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:text-primary-light transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
-            aria-label="TypeScript (opens in new tab)"
-          >
-            TypeScript
-          </a>
-          , and{' '}
-          <a
-            href="https://aws.amazon.com/lambda/"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-primary hover:text-primary-light transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
-            aria-label="AWS Lambda (opens in new tab)"
-          >
-            AWS Lambda
-          </a>
-        </p>
+        <div className="mb-4">
+          <p className="text-sm text-text-tertiary mb-3">Built with</p>
+          <ul className="flex flex-wrap items-center justify-center gap-x-6 gap-y-3">
+            {builtWith.map(({ name, href, logo }) => (
+              <li key={name}>
+                <a
+                  href={href}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="group inline-flex flex-col items-center gap-1.5 opacity-80 hover:opacity-100 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2 focus-visible:ring-offset-bg-tertiary rounded"
+                  aria-label={`${name} (opens in new tab)`}
+                >
+                  <img
+                    src={logo}
+                    alt={`${name} logo`}
+                    width={28}
+                    height={28}
+                    loading="lazy"
+                    className="h-7 w-auto"
+                  />
+                  <span className="text-xs text-text-tertiary group-hover:text-text-secondary transition-colors">
+                    {name}
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </div>
         <a
           href="https://github.com/Grimm07/portfolio"
           target="_blank"
