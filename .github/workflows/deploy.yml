@@ -1,0 +1,97 @@
+name: Deploy
+
+# Ships the built static site to the shadowspire-owned S3 buckets behind CloudFront, via
+# GitHub OIDC (no long-lived AWS keys). The buckets + distributions are owned/managed by the
+# separate "infrastructure" repo — this workflow only PUTs content and invalidates the cache.
+#
+#   PR / feature branch  -> DEV  (GitHub Environment "dev",        account 176355979099)
+#   push to main         -> PROD (GitHub Environment "production", account 681053994223)
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# OIDC: id-token to assume the per-account portfolio-deploy role; contents to checkout.
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # DEV — feature-branch PRs. OIDC sub = repo:Grimm07/portfolio:environment:dev
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    name: Deploy DEV
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: Configure AWS credentials (OIDC, dev account)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: arn:aws:iam::176355979099:role/portfolio-deploy
+          aws-region: us-east-1
+
+      - name: Sync to S3 + invalidate CloudFront
+        env:
+          SITE_BUCKET: shadowspire-dev-site-176355979099
+          DISTRIBUTION_ID: EGFCTGJJEER89
+        run: |
+          aws s3 sync dist/ "s3://${SITE_BUCKET}/" --delete
+          aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"
+
+  # ---------------------------------------------------------------------------
+  # PROD — pushes to main. OIDC sub = repo:Grimm07/portfolio:environment:production
+  # The "production" environment must require reviewers + restrict to the main branch.
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    name: Deploy PROD
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build site
+        run: npm run build
+
+      - name: Configure AWS credentials (OIDC, prod account)
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+        with:
+          role-to-assume: arn:aws:iam::681053994223:role/portfolio-deploy
+          aws-region: us-east-1
+
+      - name: Sync to S3 + invalidate CloudFront
+        env:
+          SITE_BUCKET: shadowspire-prod-site-681053994223
+          DISTRIBUTION_ID: E229NB0LSTX2V8
+        run: |
+          aws s3 sync dist/ "s3://${SITE_BUCKET}/" --delete
+          aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"
