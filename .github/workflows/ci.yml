@@ -124,35 +124,16 @@ jobs:
 
       - name: Build frontend
         env:
-          VITE_TURNSTILE_SITE_KEY: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
+          # WAF CAPTCHA integration URL (public). Embedded statically by Vite at build time.
+          VITE_WAF_INTEGRATION_URL: ${{ vars.VITE_WAF_INTEGRATION_URL }}
         run: npm run build
 
-      # Build worker
-      - name: Install worker dependencies
-        working-directory: worker
-        run: npm ci
-
-      - name: Worker type check
-        working-directory: worker
-        run: npm run typecheck
-
-      - name: Build worker
-        working-directory: worker
-        run: npm run build
-
-      # Upload artifacts for downstream jobs
+      # Upload artifact for downstream jobs (worker is retired in 2c — no longer built here)
       - name: Upload frontend build
         uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
           path: dist/
-          retention-days: 1
-
-      - name: Upload worker build
-        uses: actions/upload-artifact@v4
-        with:
-          name: worker-dist
-          path: worker/dist/
           retention-days: 1
 
   # =============================================================================
@@ -165,13 +146,6 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
-
-      # Download worker artifact (needed for terraform validate)
-      - name: Download worker build
-        uses: actions/download-artifact@v4
-        with:
-          name: worker-dist
-          path: worker/dist/
 
       - name: Setup OpenTofu
         uses: opentofu/setup-opentofu@9d84900f3238fab8cd84ce47d658d25dd008be2f # v1
@@ -204,48 +178,16 @@ jobs:
         run: tflint --format compact
 
   # =============================================================================
-  # DEPLOY FRONTEND - Publishes the built SPA. DECOUPLED from infra/terraform so the
-  # site keeps shipping even while the AWS infra apply / state migration is in flight.
-  # Still targets Cloudflare Pages until Plan 2b's CloudFront/S3 edge is applied and
-  # verified; the cutover to `aws s3 sync` + invalidation is Plan 2c.
-  # =============================================================================
-  deploy-frontend:
-    name: Deploy Frontend
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [validate, test-backend, build]
-    environment: production
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Download frontend build
-        uses: actions/download-artifact@v4
-        with:
-          name: frontend-dist
-          path: dist/
-
-      - name: Deploy frontend to Cloudflare Pages
-        uses: cloudflare/wrangler-action@9acf94ace14e7dc412b076f2c5c20b8ce93c79cd # v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy dist/ --project-name trystan-portfolio --branch main
-
-  # =============================================================================
-  # DEPLOY INFRA - OpenTofu apply against the S3 backend, authenticated via GitHub OIDC.
+  # DEPLOY - Post-2c cutover: OpenTofu apply (AWS edge + DNS) via GitHub OIDC, then ship the
+  # SPA to the static-site S3 bucket and invalidate CloudFront. The frontend now lives on AWS,
+  # so it needs the tofu outputs (site_bucket, distribution_id) + AWS creds — hence one job.
   #
-  # ⚠️ ONE-TIME PREREQUISITE before this job's apply will succeed:
-  #   1. Create the GitHub OIDC identity provider + an IAM deploy role in AWS; expose its
-  #      ARN as the repo secret AWS_DEPLOY_ROLE_ARN (trust: repo:Grimm07/portfolio).
-  #   2. Provide the state bucket name as the repo secret TF_STATE_BUCKET.
-  #   3. Migrate existing state GitLab(http) -> S3 ONCE (locally, with both creds):
-  #        tofu init -migrate-state -backend-config="bucket=$TF_STATE_BUCKET"
-  #      Otherwise a fresh S3 state will try to re-create live Cloudflare resources.
-  # The frontend deploy above is independent, so prod keeps serving regardless of this job.
+  # ⚠️ ONE-TIME PREREQS before apply succeeds: create the GitHub OIDC role
+  #   (AWS_DEPLOY_ROLE_ARN), set TF_STATE_BUCKET, and migrate state to S3 once. The apply
+  #   will DESTROY the Cloudflare Pages/Worker resources (2c) — review the plan in the logs.
   # =============================================================================
-  deploy-infra:
-    name: Deploy Infra
+  deploy:
+    name: Deploy
     runs-on: ubuntu-latest
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     needs: [validate, test-backend, build, terraform]
@@ -257,11 +199,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Download worker build
+      - name: Download frontend build
         uses: actions/download-artifact@v4
         with:
-          name: worker-dist
-          path: worker/dist/
+          name: frontend-dist
+          path: dist/
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
@@ -284,8 +226,6 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
-          TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
           TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
         run: tofu plan -out=tfplan
 
@@ -295,7 +235,18 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ secrets.CLOUDFLARE_ZONE_ID }}
-          TF_VAR_turnstile_site_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SITE_KEY }}
-          TF_VAR_turnstile_secret_key: ${{ secrets.CLOUDFLARE_TURNSTILE_SECRET_KEY }}
           TF_VAR_contact_email: ${{ secrets.CONTACT_EMAIL }}
         run: tofu apply -auto-approve tfplan
+
+      - name: Read tofu outputs
+        id: tf
+        working-directory: terraform
+        run: |
+          echo "site_bucket=$(tofu output -raw site_bucket)" >> "$GITHUB_OUTPUT"
+          echo "distribution_id=$(tofu output -raw cloudfront_distribution_id)" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy frontend to S3 + invalidate CloudFront
+        env:
+          SITE_BUCKET: ${{ steps.tf.outputs.site_bucket }}
+          DISTRIBUTION_ID: ${{ steps.tf.outputs.distribution_id }}
+        run: ./scripts/deploy-frontend.sh
