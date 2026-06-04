@@ -16,7 +16,10 @@ provider "aws" {
 }
 
 locals {
-  name_prefix = "portfolio-contact"
+  env         = var.environment                  # "prod" | "dev"
+  name_prefix = "portfolio-contact-${local.env}" # re-keys all 2a resource names
+  # prod serves the apex domain; non-prod serves "<env>.<domain>" (e.g. dev.trystan-tbm.dev)
+  site_domain = local.env == "prod" ? var.domain_name : "${local.env}.${var.domain_name}"
   # Derive the From address from the domain — no email literal hardcoded.
   from_email = "noreply@${var.domain_name}"
 }

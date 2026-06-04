@@ -43,3 +43,14 @@ variable "aws_region" {
   default     = "us-east-1"
 }
 
+variable "environment" {
+  description = "Deployment environment (drives resource names + state). prod is the live/default env."
+  type        = string
+  default     = "prod"
+
+  validation {
+    condition     = contains(["prod", "dev"], var.environment)
+    error_message = "environment must be \"prod\" or \"dev\"."
+  }
+}
+
