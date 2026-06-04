@@ -39,56 +39,29 @@ resource "cloudflare_pages_domain" "portfolio" {
   name = var.domain_name
 }
 
-# DNS CNAME Record for Root Domain (v5: cloudflare_dns_record)
-# Points the root domain (@) to the Cloudflare Pages deployment
-# This allows trystan-tbm.dev to serve the portfolio site
+# DNS CNAME Record for Root Domain — points apex at the AWS CloudFront edge (Plan 2c cutover).
 resource "cloudflare_dns_record" "pages_root" {
-  # Zone ID where the DNS record will be created
   zone_id = var.cloudflare_zone_id
+  name    = "@"
+  type    = "CNAME"
 
-  # Record name: '@' represents the root domain (trystan-tbm.dev)
-  name = "@"
-
-  # Record type: CNAME allows pointing to another domain
-  type = "CNAME"
-
-  # Target: Cloudflare Pages canonical domain for the project
-  # Format: <project-name>.pages.dev
-  content = "${cloudflare_pages_project.portfolio.name}.pages.dev"
-
-  # Enable Cloudflare proxy (orange cloud)
-  # This provides DDoS protection, CDN, and SSL/TLS encryption
-  proxied = true
-
-  # TTL: 1 means automatic (Cloudflare manages TTL)
-  # When proxied, TTL is automatically set by Cloudflare
-  ttl = 1
+  # DNS-only (grey cloud): Cloudflare is name-service only; CloudFront (2b) serves the site
+  # and terminates TLS via its ACM cert. Apex CNAME resolves via Cloudflare CNAME flattening.
+  content = aws_cloudfront_distribution.site.domain_name
+  proxied = false
+  ttl     = 300
 }
 
-# DNS CNAME Record for WWW Subdomain (v5: cloudflare_dns_record)
-# Points www.trystan-tbm.dev to the same Pages deployment
-# This ensures both trystan-tbm.dev and www.trystan-tbm.dev work
+# DNS CNAME Record for WWW Subdomain — points www at the AWS CloudFront edge (Plan 2c cutover).
 resource "cloudflare_dns_record" "pages_www" {
-  # Zone ID where the DNS record will be created
   zone_id = var.cloudflare_zone_id
+  name    = "www"
+  type    = "CNAME"
 
-  # Record name: 'www' creates www.trystan-tbm.dev
-  name = "www"
-
-  # Record type: CNAME allows pointing to another domain
-  type = "CNAME"
-
-  # Target: Cloudflare Pages canonical domain for the project
-  # Format: <project-name>.pages.dev
-  content = "${cloudflare_pages_project.portfolio.name}.pages.dev"
-
-  # Enable Cloudflare proxy (orange cloud)
-  # This provides DDoS protection, CDN, and SSL/TLS encryption
-  proxied = true
-
-  # TTL: 1 means automatic (Cloudflare manages TTL)
-  # When proxied, TTL is automatically set by Cloudflare
-  ttl = 1
+  # DNS-only (grey cloud) → CloudFront, same as the apex record above.
+  content = aws_cloudfront_distribution.site.domain_name
+  proxied = false
+  ttl     = 300
 }
 
 # Cloudflare Worker for Contact Form
