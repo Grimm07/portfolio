@@ -3,6 +3,7 @@ import type { SESClient } from '@aws-sdk/client-ses';
 import type { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { SESClient as SES } from '@aws-sdk/client-ses';
 import { SecretsManagerClient as SM } from '@aws-sdk/client-secrets-manager';
+import { timingSafeEqual } from 'node:crypto';
 
 import type { ContactSubmission } from '../shared/types';
 import { isHoneypotTripped, isTooFast, isValidEmail, isValidMessage, sanitizeName } from '../shared/validation';
@@ -13,6 +14,7 @@ import { sendContactEmail } from './email';
 export interface IngestEnv {
   FROM_EMAIL: string;                 // verified SES identity (noreply@<domain>)
   CONTACT_EMAIL_SECRET_ARN: string;   // Secrets Manager ARN holding the recipient address
+  ORIGIN_VERIFY_SECRET: string;       // shared secret CloudFront injects as x-origin-verify
 }
 
 export interface IngestDeps {
@@ -21,29 +23,49 @@ export interface IngestDeps {
   now: () => number;
 }
 
-interface FunctionUrlEvent {
+// AWS API Gateway HTTP API (payload format 2.0). Response uses the simple
+// { statusCode, headers, body } form, which v2 proxy integrations accept as-is.
+interface ApiGatewayV2Event {
   headers: Record<string, string | undefined>;
   body?: string;
+  isBase64Encoded?: boolean;
 }
-interface FunctionUrlResult {
+interface ApiGatewayV2Result {
   statusCode: number;
   headers: Record<string, string>;
   body: string;
 }
 
-function json(statusCode: number, payload: unknown): FunctionUrlResult {
+// Constant-time comparison of the x-origin-verify header against the expected secret.
+// Fails closed: a missing expected secret, a missing header, or any length mismatch -> false.
+function originVerified(headerValue: string | undefined, expected: string): boolean {
+  if (!expected || typeof headerValue !== 'string') return false;
+  const a = Buffer.from(headerValue);
+  const b = Buffer.from(expected);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+function json(statusCode: number, payload: unknown): ApiGatewayV2Result {
   return { statusCode, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) };
 }
 
-export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): Promise<FunctionUrlResult> {
+export async function handleIngest(event: ApiGatewayV2Event, deps: IngestDeps): Promise<ApiGatewayV2Result> {
   const { env, clients, now } = deps;
+
+  // Reject anything that didn't come through CloudFront (and thus skipped WAF).
+  if (!originVerified(event.headers['x-origin-verify'], deps.env.ORIGIN_VERIFY_SECRET)) {
+    return json(403, { error: 'Forbidden' });
+  }
 
   // Snapshot now() once — reused for time-trap and createdAt.
   const ts = now();
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(event.body ?? '');
+    const rawBody = event.isBase64Encoded && event.body
+      ? Buffer.from(event.body, 'base64').toString('utf8')
+      : (event.body ?? '');
+    parsed = JSON.parse(rawBody);
   } catch {
     return json(400, { error: 'Invalid request' });
   }
@@ -86,8 +108,9 @@ export async function handleIngest(event: FunctionUrlEvent, deps: IngestDeps): P
 const env: IngestEnv = {
   FROM_EMAIL: process.env.FROM_EMAIL!,
   CONTACT_EMAIL_SECRET_ARN: process.env.CONTACT_EMAIL_SECRET_ARN!,
+  ORIGIN_VERIFY_SECRET: process.env.ORIGIN_VERIFY_SECRET!,
 };
 const clients = { ses: new SES({}), secrets: new SM({}) };
 
-export const handler = (event: FunctionUrlEvent): Promise<FunctionUrlResult> =>
+export const handler = (event: ApiGatewayV2Event): Promise<ApiGatewayV2Result> =>
   handleIngest(event, { env, clients, now: () => Date.now() });
