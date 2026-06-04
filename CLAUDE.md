@@ -56,8 +56,10 @@ tofu apply -var environment=dev                          # apply to the selected
   via the WAF integration script (`VITE_WAF_INTEGRATION_URL`). The edge WAF rule validates the token.
 
 ### Contact backend (`backend/src/`)
-A single `portfolio-contact-ingest` Lambda behind an `AWS_IAM` Function URL fronted by CloudFront (OAC).
-- `ingest/handler.ts`: parse → honeypot (`website`) → time-trap (reject too-fast) → field validation → SES send.
+A single `portfolio-contact-ingest` Lambda invoked by an infra-owned **API Gateway** (HTTP API,
+payload format 2.0), fronted by CloudFront which injects an `x-origin-verify` secret header.
+- `ingest/handler.ts`: verify `x-origin-verify` (reject WAF-bypassing requests) → parse (API
+  Gateway v2 event) → honeypot (`website`) → time-trap → field validation → SES send.
 - `ingest/email.ts`: sends one Amazon SES email per submission (`Reply-To` = submitter).
 - `ingest/ip.ts`: extracts client IP for the email body.
 - `shared/secrets.ts`: reads the recipient address from Secrets Manager (never hardcoded).
@@ -67,13 +69,15 @@ A single `portfolio-contact-ingest` Lambda behind an `AWS_IAM` Function URL fron
 Lambda — there is no token check or per-IP counter in the handler.
 
 ### Infrastructure (`terraform/`)
-OpenTofu, AWS-only. Manages: the ingest Lambda + IAM role (SES send + secret read), the `AWS_IAM`
-Function URL, SES domain/DKIM, the contact-email secret, and the SSM handshake. State is a **per-env
+OpenTofu, AWS-only. Manages: the ingest Lambda + IAM role (SES send + secret read), the API Gateway
+invoke permission, SES domain/DKIM, the contact-email secret, and the SSM handshake. State is a **per-env
 S3 backend** (each env's own account-scoped `shadowspire-<env>-state-*` bucket + `shadowspire-<env>-tf-lock`
 DynamoDB lock) selected via partial `-backend-config=backend-<env>.hcl`.
 
-- Publishes `/portfolio/<env>/ingest-function-url` to SSM for the infra repo.
-- `permissions.tf` grants CloudFront OAC permission to invoke the Function URL (reads the dist ARN from SSM).
+- Publishes `/portfolio/<env>/ingest-function-arn` to SSM for the infra repo.
+- `permissions.tf` grants **API Gateway** permission to invoke the Lambda (reads
+  `/portfolio/<env>/api-execution-arn` from SSM); `lambda.tf` injects `ORIGIN_VERIFY_SECRET` from
+  the `/portfolio/<env>/origin-verify-secret` SecureString.
 - The `cloudflare` provider is retained **only** for the SES DKIM CNAME records in `ses.tf`.
 
 **IMPORTANT**: Build the Lambda bundle before applying Terraform (the archive references `backend/dist`):
@@ -120,6 +124,20 @@ Runs automatically on commit:
 - Secrets detection (blocks commits with API keys, emails)
 - Commit message minimum 10 characters
 
+### Operational gotchas
+- **SES is in sandbox (intentional)**: both the sending domain AND the recipient inbox must be
+  verified or `SendEmail` throws `MessageRejected` → the contact form returns 500. The recipient
+  identity needs a one-time **manual click** on the AWS verification email (links expire in 24h;
+  resend: `aws ses verify-email-identity --email-address <addr>`). Check:
+  `aws sesv2 get-email-identity --email-identity <addr> --query VerifiedForSendingStatus`. Dev and
+  prod verify separately.
+- **Never log a caught error object/message** in the Lambda — CodeQL `js/clear-text-logging` fails
+  the PR (errors can embed env-sourced data: secret ARN, addresses). Log a fixed-literal label
+  instead (see `errorLabel()` in `handler.ts`).
+- **Merging to `main` deploys prod**; the prod `tofu apply` fail-loud aborts (no changes) until the
+  infra repo has published `/portfolio/prod/*` SSM params. A red prod deploy on `main` usually means
+  prod infra (`make prod-apply` in the infra repo) hasn't run yet.
+
 ## Environment Setup
 
 **Frontend** (`.env`):
@@ -144,10 +162,10 @@ cloudflare_zone_id   = "..."
 | `src/components/Contact.tsx` | Contact form with AWS WAF CAPTCHA integration |
 | `backend/src/ingest/handler.ts` | Ingest Lambda: honeypot, time-trap, validation, SES send |
 | `backend/src/ingest/email.ts` | Single-submission SES email sender |
-| `terraform/lambda.tf` | Ingest Lambda + `AWS_IAM` Function URL |
+| `terraform/lambda.tf` | Ingest Lambda (invoked by API Gateway) + origin-verify env var |
 | `terraform/iam.tf` | Ingest role (SES send + secret read) |
 | `terraform/ses.tf` | SES domain identity + DKIM (Cloudflare-managed CNAMEs) |
-| `terraform/ssm.tf` / `permissions.tf` | SSM handshake + CloudFront OAC invoke grant |
+| `terraform/ssm.tf` / `permissions.tf` | SSM handshake + API Gateway invoke grant |
 | `terraform/backend-{dev,prod}.hcl` | Per-env S3 state backend config |
 | `tailwind.config.js` | Theme colors and fonts |
 | `vite.config.ts` | Build configuration with chunk splitting |
