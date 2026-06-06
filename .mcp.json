@@ -14,6 +14,18 @@
       "env": {
         "PROJECT_MCP_CONFIG": "/home/grimm/code/agent-tools/mcps/portfolio-mcp/project-mcp.toml"
       }
+    },
+    "infrastructure-mcp": {
+      "command": "/home/grimm/code/agent-tools/mcps/infrastructure-mcp/bin/infrastructure-mcp",
+      "env": {
+        "PROJECT_MCP_CONFIG": "/home/grimm/code/agent-tools/mcps/infrastructure-mcp/project-mcp.toml"
+      }
+    },
+    "agent-tools-mcp": {
+      "command": "/home/grimm/code/agent-tools/mcps/agent-tools-mcp/bin/agent-tools-mcp",
+      "env": {
+        "PROJECT_MCP_CONFIG": "/home/grimm/code/agent-tools/mcps/agent-tools-mcp/project-mcp.toml"
+      }
     }
   }
 }
