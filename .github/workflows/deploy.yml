@@ -9,6 +9,8 @@ name: Deploy
 #
 # The WAF CAPTCHA integration URL (VITE_WAF_INTEGRATION_URL) is published by the infra repo to
 # SSM /shadowspire/<env>/waf-integration-url; we read it after OIDC auth and embed it at build.
+# The CloudFront distribution id is likewise read from SSM /shadowspire/<env>/cloudfront-distribution-id
+# (single source of truth); the hardcoded DISTRIBUTION_ID env stays only as a fallback.
 
 on:
   push:
@@ -53,7 +55,7 @@ jobs:
           role-to-assume: arn:aws:iam::176355979099:role/portfolio-deploy
           aws-region: us-east-1
 
-      - name: Read WAF CAPTCHA integration URL + API key from SSM
+      - name: Read WAF + CloudFront distribution from SSM
         id: waf
         run: |
           URL=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-integration-url" \
@@ -63,10 +65,17 @@ jobs:
           if [ -z "$URL" ] || [ -z "$KEY" ]; then
             echo "::warning::/shadowspire/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
           fi
+          # CloudFront distribution id (infra publishes it; fall back to the env default if absent).
+          DIST=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/cloudfront-distribution-id" \
+                  --query Parameter.Value --output text 2>/dev/null || echo "")
+          if [ -z "$DIST" ]; then
+            echo "::warning::/shadowspire/${SSM_ENV}/cloudfront-distribution-id not in SSM — using the workflow's DISTRIBUTION_ID fallback"
+          fi
           # The API key is a client-side value, but keep it out of plaintext logs.
           echo "::add-mask::$KEY"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "dist=${DIST:-$DISTRIBUTION_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Build site
         env:
@@ -77,7 +86,7 @@ jobs:
       - name: Sync to S3 + invalidate CloudFront
         run: |
           aws s3 sync dist/ "s3://${SITE_BUCKET}/" --delete
-          aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"
+          aws cloudfront create-invalidation --distribution-id "${{ steps.waf.outputs.dist }}" --paths "/*"
 
   # ---------------------------------------------------------------------------
   # PROD — pushes to main. OIDC sub = repo:Grimm07/portfolio:environment:production
@@ -108,7 +117,7 @@ jobs:
           role-to-assume: arn:aws:iam::681053994223:role/portfolio-deploy
           aws-region: us-east-1
 
-      - name: Read WAF CAPTCHA integration URL + API key from SSM
+      - name: Read WAF + CloudFront distribution from SSM
         id: waf
         run: |
           URL=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-integration-url" \
@@ -118,10 +127,17 @@ jobs:
           if [ -z "$URL" ] || [ -z "$KEY" ]; then
             echo "::warning::/shadowspire/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
           fi
+          # CloudFront distribution id (infra publishes it; fall back to the env default if absent).
+          DIST=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/cloudfront-distribution-id" \
+                  --query Parameter.Value --output text 2>/dev/null || echo "")
+          if [ -z "$DIST" ]; then
+            echo "::warning::/shadowspire/${SSM_ENV}/cloudfront-distribution-id not in SSM — using the workflow's DISTRIBUTION_ID fallback"
+          fi
           # The API key is a client-side value, but keep it out of plaintext logs.
           echo "::add-mask::$KEY"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
+          echo "dist=${DIST:-$DISTRIBUTION_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Build site
         env:
@@ -132,4 +148,4 @@ jobs:
       - name: Sync to S3 + invalidate CloudFront
         run: |
           aws s3 sync dist/ "s3://${SITE_BUCKET}/" --delete
-          aws cloudfront create-invalidation --distribution-id "${DISTRIBUTION_ID}" --paths "/*"
+          aws cloudfront create-invalidation --distribution-id "${{ steps.waf.outputs.dist }}" --paths "/*"
