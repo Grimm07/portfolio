@@ -31,9 +31,12 @@ pre-commit:
     # - Google API keys (AIza...)
     # - Stripe live keys (sk_live_...)
     # - Email addresses
+    # Scoped to shipped/source files: the `.claude/` dev tooling (e.g. the
+    # block-secrets detector script and the pr-check skill) legitimately contains
+    # these detection patterns and would otherwise self-trip on every commit.
     secrets-check:
       run: |
-        if git diff --cached --name-only | xargs grep -nHE '(AKIA|AIza[0-9A-Za-z-_]{35}|sk_live_[0-9a-zA-Z]{24}|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})' 2>/dev/null; then
+        if git diff --cached --name-only | grep -vE '^(\.claude/|lefthook\.yml$)' | xargs -r grep -nHE '(AKIA|AIza[0-9A-Za-z-_]{35}|sk_live_[0-9a-zA-Z]{24}|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})' 2>/dev/null; then
           echo "❌ Potential secrets or email addresses detected in staged files!"
           echo "Please review and remove before committing."
           exit 1

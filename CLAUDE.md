@@ -2,132 +2,129 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Agent behavior — you are a COORDINATOR
+
+For substantive work in a specialized domain, delegate to the appropriate specialist sub-agent
+rather than carrying every gotcha in this file. Route by domain:
+
+| Domain | Specialist | Scope |
+|---|---|---|
+| React components, `App.tsx` composition, Tailwind theme tokens, dark-mode toggle | `frontend-component-expert` (project) | repo-specific |
+| Contact form (`Contact.tsx`), WAF CAPTCHA, `POST /api/contact` contract, backend seam | `contact-form-waf-expert` (project) | repo-specific |
+| CI/CD: `deploy.yml`/`ci.yml`, OIDC `portfolio-deploy`, SSM build reads, S3 sync + CloudFront invalidation | `deploy-pipeline-expert` (project) | repo-specific |
+| Vite build, chunk splitting, bundle budget, Mermaid lazy-load, lockfile gotchas | `build-perf-expert` (project) | repo-specific |
+| Writing Vitest + RTL tests for untested components (mirrors repo test conventions) | `test-coverage-writer` (project) | repo-specific |
+| General React 18 / TypeScript-strict / hooks / a11y / Tailwind craft | `react-frontend-expert` (global) | general |
+| General AWS services / IAM / CloudFront / cost / security | `aws-cloud-expert` (global) | general |
+| Breaking-change impact on the `/api/contact` request/response shape | `api-contract-validator` (global) | general |
+| General DevOps/CI-CD craft (GitHub Actions, OIDC, release reliability) — complements `deploy-pipeline-expert` | `devops-cicd-expert` (global) | general |
+| Root-cause analysis of errors / build / test / CI / lockfile failures + remediation | `error-diagnostician` (global) | general |
+
+Project-level specialists (`.claude/agents/`) hold **this repo's** gotchas; global specialists
+(`~/.claude/agents/`) hold reusable expertise. As coordinator, send domain specifics to the project
+agent and general mechanics to the global one. The per-domain operational gotchas that used to live
+in this file now live in those specialists.
+
 ## Project Overview
 
-Personal portfolio website for Trystan Bates-Maricle (AI/ML Engineer). **This repo is the
-frontend** (React + Vite static site). The contact backend and its infrastructure live in a
-separate repo. AWS-only (us-east-1):
-- **Frontend** (this repo): React 18 + TypeScript + Tailwind CSS, built with Vite; static build hosted on S3 and served via CloudFront (OAC). The S3 site bucket, CloudFront distribution, ACM cert, and AWS WAF are owned by a separate infra repo (the shadowspire landing zone) — this repo syncs the build to that bucket and invalidates that distribution.
-- **Backend + Infrastructure** (separate repo): the `portfolio-contact-ingest` Lambda and its
-  OpenTofu live in **`../portfolio-backend`** (`github.com/Grimm07/portfolio-backend`). The contact
-  form posts to an infra-owned API Gateway that invokes that Lambda; this repo only embeds the API
-  path and the WAF integration URL at build time.
+Personal portfolio for Trystan Bates-Maricle (AI/ML Engineer). **This repo is the frontend** — a
+React 18 + TypeScript + Tailwind static site built with Vite, hosted on S3 and served via CloudFront
+(OAC). AWS-only (us-east-1). Live at https://trystan-tbm.dev.
 
-Live at: https://trystan-tbm.dev
+- The **S3 site bucket, CloudFront distribution, ACM cert, and AWS WAF** are owned by the separate
+  **infrastructure** repo (the shadowspire landing zone). This repo only syncs the build to that
+  bucket and invalidates that distribution — see `deploy-pipeline-expert`.
+- The **contact backend** (the `portfolio-contact-ingest` Lambda, its OpenTofu, SES/DKIM, secrets,
+  API Gateway) lives in **`../portfolio-backend`** (`github.com/Grimm07/portfolio-backend`). The
+  contact form posts same-origin to an infra-owned endpoint that invokes that Lambda; this repo only
+  embeds the API path and the WAF integration URL/key at build time — see `contact-form-waf-expert`.
 
-> The Cloudflare→AWS migration is **complete**: the contact backend, infrastructure, and frontend
-> hosting all run on the shadowspire AWS landing zone (us-east-1); apex/www/dev all serve from
-> CloudFront→S3. The Cloudflare zone is retained **only** to host DNS and the SES DKIM CNAME records.
-> Historical sequencing lives in `docs/superpowers/plans/2026-06-03-aws-cutover-reconciliation.md`;
-> backend operations/runbook now live in the `portfolio-backend` repo.
+> The Cloudflare→AWS migration is **complete**: backend, infrastructure, and frontend hosting all
+> run on the shadowspire AWS landing zone (us-east-1); apex/www/dev serve from CloudFront→S3. The
+> Cloudflare zone is retained **only** for DNS and the SES DKIM CNAME records. Historical sequencing:
+> `docs/superpowers/plans/2026-06-03-aws-cutover-reconciliation.md`. Backend runbook lives in the
+> `portfolio-backend` repo.
 
 ## Development Commands
 
 ```bash
-# Frontend development
-npm run dev              # Start Vite dev server (http://localhost:5173)
-npm run build            # Build for production (tsc + vite build)
-npm run preview          # Preview production build locally
-npm run lint             # ESLint check
-
-# Type checking
-npx tsc --noEmit         # Type check without emitting files
+npm run dev              # Vite dev server (http://localhost:5173)
+npm run build            # Production build (tsc -b && vite build)
+npm run preview          # Preview the production build locally
+npm run lint             # ESLint
+npm run test             # Vitest (watch); test:run for one-shot, test:coverage for coverage
+npm run analyze          # Bundle analysis build (--mode analyze)
+npx tsc --noEmit         # Type check without emitting
 ```
 
-> **Contact backend + infrastructure** (the Lambda, OpenTofu, SES, secrets) now live in the
-> **`../portfolio-backend`** repo with their own commands, tests, and CI/CD. Nothing in this repo
-> builds or deploys the Lambda anymore.
+> The contact **backend + infrastructure** (Lambda, OpenTofu, SES, secrets) live in
+> **`../portfolio-backend`** with their own commands, tests, and CI/CD. Nothing here builds or
+> deploys the Lambda.
 
-## Architecture
+## Cross-cutting facts (all domains — owned by no single specialist)
 
-### Frontend (`src/`)
-- **App.tsx**: Main layout and component composition
-- **Components**: Functional components with named exports, props interfaces required
-- **Styling**: Tailwind-first with custom theme colors in `tailwind.config.js`
-- **Theme**: Dark mode default, class-based toggle (`darkMode: 'class'`)
-- **Contact form** (`components/Contact.tsx`): same-origin `POST /api/contact`, with AWS WAF CAPTCHA
-  via the WAF integration script (`VITE_WAF_INTEGRATION_URL`). The edge WAF rule validates the token.
-
-### Contact backend + Infrastructure (separate repo)
-The `portfolio-contact-ingest` Lambda, its OpenTofu (IAM, SES/DKIM, contact-email secret, the SSM
-handshake, API Gateway invoke grant), and the backend runbook/specs now live in
-**`../portfolio-backend`** (`github.com/Grimm07/portfolio-backend`). The contact form here posts
-same-origin to an infra-owned **API Gateway** that invokes that Lambda; CAPTCHA + rate-limiting are
-enforced by **AWS WAF at the edge** before the request ever reaches the Lambda. To work on the
-handler, validation, SES email, or the Terraform, switch to that repo.
-
-### Deployment
-GitHub Actions with OIDC (no long-lived AWS keys). `deploy.yml` in **this** repo only builds the
-static site and syncs it to S3 + invalidates CloudFront (dev on PRs, prod on push to `main`). It
-reads the WAF integration URL/key from SSM at build time. The Lambda + Terraform deploy is owned by
-the `portfolio-backend` repo's own `deploy.yml`.
-
-## Code Style
-
-- **Imports**: React → external packages → local components → types
-- **Components**: Functional only, named exports, props interfaces always defined
-- **CSS**: Tailwind utilities only, avoid custom CSS
-- **TypeScript**: Strict mode enabled (`noUnusedLocals`, `noUnusedParameters`)
-
-### Custom Tailwind Colors
-```
-primary: #3b82f6 (blue), secondary: #8b5cf6 (purple)
-bg-primary: #0a0a0a, bg-secondary: #141414, bg-tertiary: #1f1f1f
-```
-
-## Security Requirements (Critical)
-
+### Security requirements (CRITICAL — hard project rules)
 **NEVER include in code:**
-- Email addresses (no `mailto:`, no plaintext)
-- Phone numbers (any format)
-- API keys or secrets
+- Email addresses (no `mailto:`, no plaintext) — the lefthook secrets-check regex blocks them.
+- Phone numbers (any format).
+- API keys or secrets.
 
-**Contact is form-only** - LinkedIn link is safe (has its own spam protection).
+**Contact is form-only.** The only allowed direct-contact affordances are the LinkedIn / GitHub /
+GitLab profile links (each has its own spam protection). Secrets are never hardcoded: the frontend's
+only injected values are the `VITE_WAF_*` build-time vars (embedded statically — see
+`contact-form-waf-expert` / `deploy-pipeline-expert`); the recipient address lives in AWS Secrets
+Manager, read at runtime by the backend repo.
 
-Secrets are never hardcoded:
-- Frontend (this repo): `VITE_WAF_INTEGRATION_URL` (via `.env` at build time; `VITE_*` vars are embedded statically)
-- Lambda secret handling lives in the `portfolio-backend` repo (recipient address in **AWS Secrets
-  Manager**, read at runtime).
+### Pre-commit hooks (Lefthook) — run automatically on commit
+- TypeScript type check (`tsc --noEmit`)
+- ESLint on staged `*.{ts,tsx}`
+- Secrets detection (blocks AWS/Google/Stripe keys and email addresses)
+- Commit message ≥ 10 characters
 
-### Pre-commit Hooks (Lefthook)
-Runs automatically on commit:
-- TypeScript type checking
-- ESLint on staged files
-- Secrets detection (blocks commits with API keys, emails)
-- Commit message minimum 10 characters
+### Claude Code hooks (`.claude/settings.json`) — run on Claude's tool calls
+These give Claude immediate feedback during edits, ahead of the commit-time Lefthook gate:
+- **PreToolUse** `block-secrets.sh` — blocks an `Edit`/`Write`/`MultiEdit` whose new content adds a
+  secret or email address, scoped to source files (`/src/`, root `index.html`); skips `docs/`,
+  `.claude/`, `*.md`. Fail-open. (Enforces the CRITICAL security rule above at edit time.)
+- **PostToolUse** `typecheck-changed.sh` — runs `tsc --noEmit` after a `.ts`/`.tsx` edit.
+- **PostToolUse** `lockfile-reminder.sh` — on a `package.json` edit, injects a non-blocking reminder
+  to regenerate the lockfile cleanly (`rm -rf node_modules package-lock.json && npm install`) per the
+  Vite 8 / Rolldown `@emnapi` gotcha — see `build-perf-expert`.
 
-### Operational gotchas
-- **Merging to `main` deploys the prod site** (S3 sync + CloudFront invalidation). The frontend
-  deploy needs the `production` GitHub environment + the `portfolio-deploy` OIDC role; it reads the
-  WAF integration URL/key from `/portfolio/prod/*` SSM (published by the infra repo).
-- **Backend gotchas moved**: SES sandbox verification, the CodeQL `js/clear-text-logging` rule, and
-  the Lambda/Terraform prod-deploy fail-loud behavior are now documented in the `portfolio-backend`
-  repo (`docs/runbooks/aws-contact-backend.md`).
+### Local skills (`.claude/skills/`) — user-invocable
+- `/new-component <Name>` — scaffold a section component to repo conventions (`frontend-component-expert`).
+- `/pr-check` — run the full local pre-PR gate (tsc, lint, `test:run`, build + bundle budget,
+  secrets scan). Note: merging to `main` triggers a **production** deploy — see `deploy-pipeline-expert`.
+
+### Code style
+- **Imports:** React → external packages → local components → types.
+- **Components:** functional only, named exports, props interface always defined.
+- **CSS:** Tailwind utilities only, avoid custom CSS.
+- **TypeScript:** strict (`noUnusedLocals`, `noUnusedParameters`).
+
+(Theme tokens, component composition, deploy mechanics, and bundle budget have moved into the
+specialists above — ask the relevant agent for the authoritative gotchas.)
 
 ## Environment Setup
 
-**Frontend** (`.env`):
+**Frontend** (`.env`, build-time `VITE_*` vars embedded statically):
 ```bash
 VITE_WAF_INTEGRATION_URL=https://<waf-integration-host>/...
+VITE_WAF_API_KEY=<client-side waf api key>
 ```
-
-> Terraform/backend environment setup (`terraform.tfvars`, etc.) now lives in the
-> `portfolio-backend` repo.
+In CI these are read from SSM `/portfolio/<env>/waf-{integration-url,api-key}` at build time
+(`deploy-pipeline-expert`). Backend/Terraform env setup lives in the `portfolio-backend` repo.
 
 ## Key Files
 
-| Path | Purpose |
-|------|---------|
-| `src/App.tsx` | Main layout, component composition |
-| `src/components/Contact.tsx` | Contact form with AWS WAF CAPTCHA integration |
-| `tailwind.config.js` | Theme colors and fonts |
-| `vite.config.ts` | Build configuration with chunk splitting |
-| `lefthook.yml` | Pre-commit hooks configuration |
-| `../portfolio-backend/` | Contact Lambda + OpenTofu + backend runbook (separate repo) |
-
-## Performance Budget
-
-- Max bundle size: 500KB
-- Max chunk size: 200KB
-- Mermaid.js lazy-loaded to reduce initial bundle
-- React vendor chunk split for caching
+| Path | Purpose | Owning specialist |
+|------|---------|-------------------|
+| `src/App.tsx` | Main layout, component composition | `frontend-component-expert` |
+| `src/components/Contact.tsx` | Contact form + AWS WAF CAPTCHA | `contact-form-waf-expert` |
+| `tailwind.config.js` | Theme colors and fonts | `frontend-component-expert` |
+| `vite.config.ts` | Build config, chunk splitting, budget | `build-perf-expert` |
+| `.github/workflows/deploy.yml` | OIDC deploy → S3 sync + CloudFront invalidation | `deploy-pipeline-expert` |
+| `lefthook.yml` | Pre-commit hooks | cross-cutting (this file) |
+| `.claude/settings.json` + `.claude/hooks/` | Claude Code edit-time hooks (secrets/typecheck/lockfile) | cross-cutting (this file) |
+| `.claude/skills/` | Local user-invocable skills (`new-component`, `pr-check`) | cross-cutting (this file) |
+| `../portfolio-backend/` | Contact Lambda + OpenTofu + runbook (separate repo) | — |

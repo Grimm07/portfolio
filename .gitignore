@@ -38,3 +38,6 @@ terraform.tfvars
 worker/.dev.vars
 worker/.wrangler/
 worker/dist/
+
+# Playwright MCP debug artifacts (transient console/page dumps)
+.playwright-mcp/
