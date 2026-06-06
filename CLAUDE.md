@@ -13,9 +13,12 @@ rather than carrying every gotcha in this file. Route by domain:
 | Contact form (`Contact.tsx`), WAF CAPTCHA, `POST /api/contact` contract, backend seam | `contact-form-waf-expert` (project) | repo-specific |
 | CI/CD: `deploy.yml`/`ci.yml`, OIDC `portfolio-deploy`, SSM build reads, S3 sync + CloudFront invalidation | `deploy-pipeline-expert` (project) | repo-specific |
 | Vite build, chunk splitting, bundle budget, Mermaid lazy-load, lockfile gotchas | `build-perf-expert` (project) | repo-specific |
+| Writing Vitest + RTL tests for untested components (mirrors repo test conventions) | `test-coverage-writer` (project) | repo-specific |
 | General React 18 / TypeScript-strict / hooks / a11y / Tailwind craft | `react-frontend-expert` (global) | general |
 | General AWS services / IAM / CloudFront / cost / security | `aws-cloud-expert` (global) | general |
 | Breaking-change impact on the `/api/contact` request/response shape | `api-contract-validator` (global) | general |
+| General DevOps/CI-CD craft (GitHub Actions, OIDC, release reliability) — complements `deploy-pipeline-expert` | `devops-cicd-expert` (global) | general |
+| Root-cause analysis of errors / build / test / CI / lockfile failures + remediation | `error-diagnostician` (global) | general |
 
 Project-level specialists (`.claude/agents/`) hold **this repo's** gotchas; global specialists
 (`~/.claude/agents/`) hold reusable expertise. As coordinator, send domain specifics to the project
@@ -78,6 +81,21 @@ Manager, read at runtime by the backend repo.
 - Secrets detection (blocks AWS/Google/Stripe keys and email addresses)
 - Commit message ≥ 10 characters
 
+### Claude Code hooks (`.claude/settings.json`) — run on Claude's tool calls
+These give Claude immediate feedback during edits, ahead of the commit-time Lefthook gate:
+- **PreToolUse** `block-secrets.sh` — blocks an `Edit`/`Write`/`MultiEdit` whose new content adds a
+  secret or email address, scoped to source files (`/src/`, root `index.html`); skips `docs/`,
+  `.claude/`, `*.md`. Fail-open. (Enforces the CRITICAL security rule above at edit time.)
+- **PostToolUse** `typecheck-changed.sh` — runs `tsc --noEmit` after a `.ts`/`.tsx` edit.
+- **PostToolUse** `lockfile-reminder.sh` — on a `package.json` edit, injects a non-blocking reminder
+  to regenerate the lockfile cleanly (`rm -rf node_modules package-lock.json && npm install`) per the
+  Vite 8 / Rolldown `@emnapi` gotcha — see `build-perf-expert`.
+
+### Local skills (`.claude/skills/`) — user-invocable
+- `/new-component <Name>` — scaffold a section component to repo conventions (`frontend-component-expert`).
+- `/pr-check` — run the full local pre-PR gate (tsc, lint, `test:run`, build + bundle budget,
+  secrets scan). Note: merging to `main` triggers a **production** deploy — see `deploy-pipeline-expert`.
+
 ### Code style
 - **Imports:** React → external packages → local components → types.
 - **Components:** functional only, named exports, props interface always defined.
@@ -107,4 +125,6 @@ In CI these are read from SSM `/portfolio/<env>/waf-{integration-url,api-key}` a
 | `vite.config.ts` | Build config, chunk splitting, budget | `build-perf-expert` |
 | `.github/workflows/deploy.yml` | OIDC deploy → S3 sync + CloudFront invalidation | `deploy-pipeline-expert` |
 | `lefthook.yml` | Pre-commit hooks | cross-cutting (this file) |
+| `.claude/settings.json` + `.claude/hooks/` | Claude Code edit-time hooks (secrets/typecheck/lockfile) | cross-cutting (this file) |
+| `.claude/skills/` | Local user-invocable skills (`new-component`, `pr-check`) | cross-cutting (this file) |
 | `../portfolio-backend/` | Contact Lambda + OpenTofu + runbook (separate repo) | — |
