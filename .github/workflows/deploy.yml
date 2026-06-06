@@ -8,7 +8,7 @@ name: Deploy
 #   push to main         -> PROD (GitHub Environment "production", account 681053994223)
 #
 # The WAF CAPTCHA integration URL (VITE_WAF_INTEGRATION_URL) is published by the infra repo to
-# SSM /portfolio/<env>/waf-integration-url; we read it after OIDC auth and embed it at build.
+# SSM /shadowspire/<env>/waf-integration-url; we read it after OIDC auth and embed it at build.
 
 on:
   push:
@@ -56,12 +56,12 @@ jobs:
       - name: Read WAF CAPTCHA integration URL + API key from SSM
         id: waf
         run: |
-          URL=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-integration-url" \
+          URL=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-integration-url" \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
-          KEY=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-api-key" --with-decryption \
+          KEY=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-api-key" --with-decryption \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
           if [ -z "$URL" ] || [ -z "$KEY" ]; then
-            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
+            echo "::warning::/shadowspire/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
           fi
           # The API key is a client-side value, but keep it out of plaintext logs.
           echo "::add-mask::$KEY"
@@ -111,12 +111,12 @@ jobs:
       - name: Read WAF CAPTCHA integration URL + API key from SSM
         id: waf
         run: |
-          URL=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-integration-url" \
+          URL=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-integration-url" \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
-          KEY=$(aws ssm get-parameter --name "/portfolio/${SSM_ENV}/waf-api-key" --with-decryption \
+          KEY=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-api-key" --with-decryption \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
           if [ -z "$URL" ] || [ -z "$KEY" ]; then
-            echo "::warning::/portfolio/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
+            echo "::warning::/shadowspire/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
           fi
           # The API key is a client-side value, but keep it out of plaintext logs.
           echo "::add-mask::$KEY"
