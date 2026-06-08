@@ -124,17 +124,24 @@ jobs:
                   --query Parameter.Value --output text 2>/dev/null || echo "")
           KEY=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/waf-api-key" --with-decryption \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
+          # PROD fails CLOSED: VITE_WAF_* are baked into the bundle at build time, so a missing
+          # integration URL/key ships a contact form whose CAPTCHA can't initialize — every
+          # POST /api/contact is then blocked by WAF (405 x-amzn-waf-action: captcha) and the
+          # Lambda is never invoked. Refuse to deploy rather than ship a silently-broken form.
+          # (Infra re-mints/republishes these to /shadowspire/prod/waf-*; if absent, fix infra
+          # and re-run this deploy.) DEV intentionally stays fail-open so PR previews aren't blocked.
           if [ -z "$URL" ] || [ -z "$KEY" ]; then
-            echo "::warning::/shadowspire/${SSM_ENV}/waf-integration-url or waf-api-key not in SSM yet — deploying without CAPTCHA wired"
+            echo "::error::/shadowspire/${SSM_ENV}/waf-integration-url or waf-api-key missing/empty in SSM — refusing to deploy a contact form without CAPTCHA wired. Populate the params (infra) and re-run."
+            exit 1
           fi
+          # The API key is a client-side value, but keep it out of plaintext logs.
+          echo "::add-mask::$KEY"
           # CloudFront distribution id (infra publishes it; fall back to the env default if absent).
           DIST=$(aws ssm get-parameter --name "/shadowspire/${SSM_ENV}/cloudfront-distribution-id" \
                   --query Parameter.Value --output text 2>/dev/null || echo "")
           if [ -z "$DIST" ]; then
             echo "::warning::/shadowspire/${SSM_ENV}/cloudfront-distribution-id not in SSM — using the workflow's DISTRIBUTION_ID fallback"
           fi
-          # The API key is a client-side value, but keep it out of plaintext logs.
-          echo "::add-mask::$KEY"
           echo "url=$URL" >> "$GITHUB_OUTPUT"
           echo "key=$KEY" >> "$GITHUB_OUTPUT"
           echo "dist=${DIST:-$DISTRIBUTION_ID}" >> "$GITHUB_OUTPUT"
